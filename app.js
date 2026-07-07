@@ -594,12 +594,24 @@ async function loadData() {
   els.provenance.innerHTML = provenanceHtml(eph.meta);
   render();
 }
+function scanCandidateRank(s, obs) {
+  // Lower is better.  Apparent brightness is the primary criterion because the scan
+  // answers “where is this most worth trying to see?” rather than “where is it highest?”.
+  // Small penalties keep very-low-altitude and twilight cases from winning when the
+  // magnitudes are otherwise similar.
+  const lowAltitudePenalty = Math.max(0, 30 - s.topo.alt) * 0.035;
+  const twilightPenalty = s.sunTopo.alt > -12 ? (s.sunTopo.alt + 12) * 0.08 : 0;
+  const penumbraPenalty = s.ecl.fraction < 1 ? (1 - s.ecl.fraction) * 2 : 0;
+  return s.mag + lowAltitudePenalty + twilightPenalty + penumbraPenalty;
+}
+
 function scanBestLocations() {
   if (!eph) return;
   els.bestResults.textContent = 'Scanning…';
   setTimeout(() => {
     const obsBase = getObserver();
-    const results = [];
+    const visibleResults = [];
+    const nearMissResults = [];
     const timeStride = Math.max(1, Math.round((5*60) / ((eph.dates[1] - eph.dates[0]) / 1000 || 60)));
     for (let i=0; i<eph.times.length; i += timeStride) {
       for (let lat=-70; lat<=70; lat+=5) {
@@ -607,14 +619,22 @@ function scanBestLocations() {
           const obs = { ...obsBase, lat, lon, height: 0 };
           const s = sampleAt(i, obs);
           if (s.topo.alt < obs.minAlt || !s.dark || !s.ecl.sunlit) continue;
-          const magPenalty = Math.max(0, s.mag - obs.magLimit) * 4;
-          const score = s.topo.alt + (obs.dark ? 8 : 0) + (s.ecl.state === 'sunlit' ? 6 : 0) - magPenalty - Math.log10(Math.max(1, s.topo.rangeKm)) * 2;
-          if (score > 0) results.push({ score, idx: i, lat, lon, alt: s.topo.alt, az: s.topo.az, mag: s.mag, range: s.topo.rangeKm, sunAlt: s.sunTopo.alt, lit: s.ecl.state, visible: s.visible });
+          const rank = scanCandidateRank(s, obs);
+          const rec = { rank, idx: i, lat, lon, alt: s.topo.alt, az: s.topo.az, mag: s.mag, range: s.topo.rangeKm, sunAlt: s.sunTopo.alt, lit: s.ecl.state, visible: s.visible };
+          if (s.visible) visibleResults.push(rec);
+          else nearMissResults.push(rec);
         }
       }
     }
-    results.sort((a,b) => b.score - a.score);
-    // de-duplicate roughly by time/region
+    const results = visibleResults.length ? visibleResults : nearMissResults;
+    results.sort((a,b) =>
+      (a.rank - b.rank) ||
+      (a.mag - b.mag) ||
+      (b.alt - a.alt) ||
+      (a.range - b.range)
+    );
+    // de-duplicate roughly by time/region after sorting, so the retained entry for
+    // each region is the brightest/best one rather than merely the highest one.
     const picked = [];
     for (const r of results) {
       if (picked.length >= 8) break;
@@ -625,9 +645,11 @@ function scanBestLocations() {
       els.bestResults.innerHTML = 'No coarse-grid candidates met the current darkness/altitude/lighting thresholds. Try lowering the limiting magnitude or minimum altitude, or load real Horizons data first.';
       return;
     }
-    els.bestResults.innerHTML = picked.map((r, n) => {
+    const note = visibleResults.length ? '' : '<div class="muted small">No candidates met the current limiting-magnitude setting; showing the least-bad geometrical near misses instead.</div>';
+    els.bestResults.innerHTML = note + picked.map((r, n) => {
       const date = fmt.format(eph.dates[r.idx]).replace(' UTC','');
-      return `<div class="best-row"><div class="best-rank">${n+1}</div><div><strong>${date} UTC</strong><br>lat ${r.lat.toFixed(1)}°, lon ${r.lon.toFixed(1)}°E · alt ${r.alt.toFixed(1)}°, az ${r.az.toFixed(0)}° · Sun ${r.sunAlt.toFixed(1)}° · ${r.lit}</div><div>mag ${r.mag.toFixed(1)}<br>${Math.round(r.range).toLocaleString()} km</div></div>`;
+      const tag = r.visible ? '' : ' · faint';
+      return `<div class="best-row"><div class="best-rank">${n+1}</div><div><strong>${date} UTC</strong><br>lat ${r.lat.toFixed(1)}°, lon ${r.lon.toFixed(1)}°E · alt ${r.alt.toFixed(1)}°, az ${r.az.toFixed(0)}° · Sun ${r.sunAlt.toFixed(1)}° · ${r.lit}${tag}</div><div>mag ${r.mag.toFixed(1)}<br>${Math.round(r.range).toLocaleString()} km</div></div>`;
     }).join('');
   }, 25);
 }

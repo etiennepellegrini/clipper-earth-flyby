@@ -83,17 +83,21 @@ def main():
             for i in range(0,len(dates),stride):
                 alt,az,rg=topo(sc[i],lat,lon,0,dates[i]); sun_alt,_,_=topo(sun[i],lat,lon,0,dates[i]); state,frac=eclipse(sc[i],sun[i]); mag=magnitude(sc[i],sun[i],rg,args.area,args.albedo,frac)
                 if alt>=args.min_alt and sun_alt<=args.dark_limit and frac>0:
-                    score=alt+8+6-max(0,mag-args.mag_limit)*4-math.log10(max(1,rg))*2
-                    if score>0: results.append((score,dates[i],lat,lon,alt,az,sun_alt,state,mag,rg))
+                    low_alt_pen=max(0,30-alt)*0.035
+                    twilight_pen=(sun_alt+12)*0.08 if sun_alt>-12 else 0
+                    penumbra_pen=(1-frac)*2
+                    rank=mag+low_alt_pen+twilight_pen+penumbra_pen
+                    visible=mag<=args.mag_limit
+                    results.append((0 if visible else 1,rank,dates[i],lat,lon,alt,az,sun_alt,state,mag,rg))
             lon+=args.lon_step
         lat+=args.lat_step
-    results.sort(reverse=True,key=lambda x:x[0])
+    results.sort(key=lambda x:(x[0],x[1],x[9],-x[5],x[10]))
     picked=[]
     for r in results:
         if len(picked)>=args.n: break
-        if not any(abs(p[2]-r[2])<10 and abs(((p[3]-r[3]+540)%360)-180)<15 and abs((p[1]-r[1]).total_seconds())<1800 for p in picked): picked.append(r)
+        if not any(abs(p[3]-r[3])<10 and abs(((p[4]-r[4]+540)%360)-180)<15 and abs((p[2]-r[2]).total_seconds())<1800 for p in picked): picked.append(r)
     print('source:',data.get('metadata',{}).get('source'))
     for k,r in enumerate(picked,1):
-        _,t,lat,lon,alt,az,sun_alt,state,mag,rg=r
+        _,_,t,lat,lon,alt,az,sun_alt,state,mag,rg=r
         print(f'{k:2d}. {t.isoformat().replace("+00:00","Z")}  lat={lat:6.1f} lonE={lon:7.1f}  alt={alt:5.1f} az={az:6.1f}  Sun={sun_alt:5.1f}  {state:8s}  mag~{mag:4.1f} range={rg:,.0f} km')
 if __name__=='__main__': main()
