@@ -46,7 +46,44 @@ def horizons_time(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime('%Y-%b-%d %H:%M:%S')
 
 
-def call_horizons(command: str, start: datetime, stop: datetime, step_sec: int, obj_data: str = 'YES') -> str:
+def horizons_step_size(start: datetime, stop: datetime, step_sec: int) -> tuple[str, float]:
+    """Return a Horizons STEP_SIZE string and the actual step in seconds.
+
+    Horizons accepts days/hours/minutes as fixed time units, but not seconds.
+    For sub-minute output, the documented method is a unitless integer: the
+    number of equal intervals into which START_TIME..STOP_TIME is divided.
+    This also works well for minute/hour cadences when the requested window is
+    exactly divisible by the cadence.
+    """
+    if step_sec <= 0:
+        raise ValueError('--step-sec must be positive')
+    total_sec = (stop - start).total_seconds()
+    if total_sec <= 0:
+        raise ValueError('--stop must be after --start')
+
+    intervals = total_sec / step_sec
+    nearest = round(intervals)
+    if nearest >= 1 and abs(intervals - nearest) < 1e-9:
+        # Unitless STEP_SIZE=N means Horizons returns N equal intervals over
+        # the requested span, producing N+1 samples including both endpoints.
+        return str(int(nearest)), total_sec / nearest
+
+    # Fallback for windows that are not an exact multiple of the cadence.
+    # The Horizons API docs list d/h/m as fixed-time abbreviations.
+    if step_sec % 86400 == 0:
+        return f'{step_sec // 86400}d', float(step_sec)
+    if step_sec % 3600 == 0:
+        return f'{step_sec // 3600}h', float(step_sec)
+    if step_sec % 60 == 0:
+        return f'{step_sec // 60}m', float(step_sec)
+
+    raise ValueError(
+        'For sub-minute cadences, Horizons requires unitless interval stepping. '
+        'Choose a start/stop window whose duration is an exact multiple of --step-sec.'
+    )
+
+
+def call_horizons(command: str, start: datetime, stop: datetime, step_size: str, obj_data: str = 'YES') -> str:
     params = {
         'format': 'json',
         'COMMAND': f"'{command}'",
@@ -55,7 +92,7 @@ def call_horizons(command: str, start: datetime, stop: datetime, step_sec: int, 
         'EPHEM_TYPE': "'VECTORS'",
         'START_TIME': f"'{horizons_time(start)}'",
         'STOP_TIME': f"'{horizons_time(stop)}'",
-        'STEP_SIZE': f"'{step_sec} sec'",
+        'STEP_SIZE': f"'{step_size}'",
         'OUT_UNITS': "'KM-S'",
         'REF_PLANE': "'FRAME'",        # ICRF/J2000 equator frame for spacecraft target
         'VEC_CORR': "'NONE'",          # geometric vectors, not apparent/light-time corrected
@@ -131,10 +168,16 @@ def main():
     if stop <= start:
         raise SystemExit('--stop must be after --start')
 
+    step_size, actual_step_sec = horizons_step_size(start, stop, args.step_sec)
+    if abs(actual_step_sec - args.step_sec) > 1e-6:
+        print(f'Note: Horizons step size {step_size!r} gives actual cadence {actual_step_sec:.6g} s.')
+    else:
+        print(f'Using Horizons STEP_SIZE={step_size!r} for {args.step_sec:g} s cadence.')
+
     print('Fetching Europa Clipper vectors from Horizons...')
-    clipper_text = call_horizons('-159', start, stop, args.step_sec, obj_data='YES')
+    clipper_text = call_horizons('-159', start, stop, step_size, obj_data='YES')
     print('Fetching Sun vectors from Horizons...')
-    sun_text = call_horizons('10', start, stop, args.step_sec, obj_data='NO')
+    sun_text = call_horizons('10', start, stop, step_size, obj_data='NO')
 
     raw_dir = Path(args.raw_dir)
     raw_dir.mkdir(parents=True, exist_ok=True)
@@ -165,7 +208,9 @@ def main():
         'query': {
             'startUtc': start.isoformat().replace('+00:00', 'Z'),
             'stopUtc': stop.isoformat().replace('+00:00', 'Z'),
-            'stepSec': args.step_sec,
+            'requestedStepSec': args.step_sec,
+            'actualStepSec': actual_step_sec,
+            'horizonsStepSize': step_size,
             'clipperCommand': '-159',
             'sunCommand': '10',
             'center': '500@399',

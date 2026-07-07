@@ -41,6 +41,8 @@ The script pre-saves:
 - Europa Clipper vectors: `COMMAND='-159'`, `CENTER='500@399'`, `EPHEM_TYPE='VECTORS'`
 - Sun vectors: `COMMAND='10'`, `CENTER='500@399'`, `EPHEM_TYPE='VECTORS'`
 
+Implementation note: Horizons does **not** accept seconds as a fixed-time `STEP_SIZE` unit. For sub-minute cadences, the fetcher converts the requested window and `--step-sec` into Horizons' documented unitless interval count. For example, `--hours 12 --step-sec 10` covers 24 hours total, so it uses `STEP_SIZE='8640'`, producing 8641 samples including both endpoints.
+
 The app itself performs no runtime Horizons calls.
 
 ## Run locally
