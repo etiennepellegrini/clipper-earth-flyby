@@ -594,63 +594,122 @@ async function loadData() {
   els.provenance.innerHTML = provenanceHtml(eph.meta);
   render();
 }
-function scanCandidateRank(s, obs) {
-  // Lower is better.  Apparent brightness is the primary criterion because the scan
-  // answers “where is this most worth trying to see?” rather than “where is it highest?”.
-  // Small penalties keep very-low-altitude and twilight cases from winning when the
-  // magnitudes are otherwise similar.
-  const lowAltitudePenalty = Math.max(0, 30 - s.topo.alt) * 0.035;
-  const twilightPenalty = s.sunTopo.alt > -12 ? (s.sunTopo.alt + 12) * 0.08 : 0;
-  const penumbraPenalty = s.ecl.fraction < 1 ? (1 - s.ecl.fraction) * 2 : 0;
-  return s.mag + lowAltitudePenalty + twilightPenalty + penumbraPenalty;
+function normalizeLon(lon) {
+  return ((lon + 540) % 360) - 180;
+}
+
+function scanCandidateRecord(i, lat, lon, obsBase) {
+  const ii = clamp(Math.round(i), 0, eph.times.length - 1);
+  const clippedLat = clamp(lat, -89.5, 89.5);
+  const wrappedLon = normalizeLon(lon);
+  const obs = { ...obsBase, lat: clippedLat, lon: wrappedLon, height: 0 };
+  const s = sampleAt(ii, obs);
+  if (s.topo.alt < obs.minAlt || !s.dark || !s.ecl.sunlit) return null;
+  return {
+    idx: ii, lat: clippedLat, lon: wrappedLon,
+    alt: s.topo.alt, az: s.topo.az, mag: s.mag, range: s.topo.rangeKm,
+    sunAlt: s.sunTopo.alt, lit: s.ecl.state, visible: s.visible,
+  };
+}
+
+function betterScanCandidate(a, b) {
+  if (!a) return false;
+  if (!b) return true;
+  // Lower astronomical magnitude is brighter.  Treat magnitude as the actual
+  // objective; min altitude, darkness, and illumination are hard filters.
+  // Tie-breakers only decide essentially equivalent brightness cases.
+  const dMag = a.mag - b.mag;
+  if (Math.abs(dMag) > 0.02) return dMag < 0;
+  const dAlt = a.alt - b.alt;
+  if (Math.abs(dAlt) > 0.5) return dAlt > 0;
+  const dSun = a.sunAlt - b.sunAlt;
+  if (Math.abs(dSun) > 0.5) return dSun < 0;
+  return a.range < b.range;
+}
+
+function scanWindowForBest(currentBest, obsBase, opts) {
+  let best = currentBest;
+  const i0 = opts.i0 ?? 0, i1 = opts.i1 ?? (eph.times.length - 1), iStep = Math.max(1, Math.round(opts.iStep ?? 1));
+  const lat0 = opts.lat0 ?? -85, lat1 = opts.lat1 ?? 85, latStep = opts.latStep ?? 5;
+  const lon0 = opts.lon0 ?? -180, lon1 = opts.lon1 ?? 180, lonStep = opts.lonStep ?? 5;
+  for (let i = Math.max(0, Math.round(i0)); i <= Math.min(eph.times.length - 1, Math.round(i1)); i += iStep) {
+    for (let lat = lat0; lat <= lat1 + 1e-9; lat += latStep) {
+      for (let lon = lon0; lon <= lon1 + 1e-9; lon += lonStep) {
+        const rec = scanCandidateRecord(i, lat, lon, obsBase);
+        if (betterScanCandidate(rec, best)) best = rec;
+      }
+    }
+  }
+  return best;
+}
+
+function refineBestCandidate(coarseBest, obsBase, sampleSec, coarseStride) {
+  let best = coarseBest;
+  if (!best) return null;
+  const oneMinute = Math.max(1, Math.round(60 / sampleSec));
+  const passes = [
+    { latSpan: 6, lonSpan: 6, latStep: 1, lonStep: 1, idxSpan: coarseStride, idxStep: oneMinute },
+    { latSpan: 1.2, lonSpan: 1.2, latStep: 0.2, lonStep: 0.2, idxSpan: 5 * oneMinute, idxStep: 1 },
+    { latSpan: 0.3, lonSpan: 0.3, latStep: 0.05, lonStep: 0.05, idxSpan: oneMinute, idxStep: 1 },
+  ];
+  for (const pass of passes) {
+    best = scanWindowForBest(best, obsBase, {
+      i0: best.idx - pass.idxSpan,
+      i1: best.idx + pass.idxSpan,
+      iStep: pass.idxStep,
+      lat0: best.lat - pass.latSpan,
+      lat1: best.lat + pass.latSpan,
+      latStep: pass.latStep,
+      lon0: best.lon - pass.lonSpan,
+      lon1: best.lon + pass.lonSpan,
+      lonStep: pass.lonStep,
+    });
+  }
+  return best;
 }
 
 function scanBestLocations() {
   if (!eph) return;
-  els.bestResults.textContent = 'Scanning…';
+  els.bestResults.textContent = 'Scanning coarse grid…';
   setTimeout(() => {
     const obsBase = getObserver();
-    const visibleResults = [];
-    const nearMissResults = [];
-    const timeStride = Math.max(1, Math.round((5*60) / ((eph.dates[1] - eph.dates[0]) / 1000 || 60)));
-    for (let i=0; i<eph.times.length; i += timeStride) {
-      for (let lat=-70; lat<=70; lat+=5) {
-        for (let lon=-180; lon<180; lon+=5) {
-          const obs = { ...obsBase, lat, lon, height: 0 };
-          const s = sampleAt(i, obs);
-          if (s.topo.alt < obs.minAlt || !s.dark || !s.ecl.sunlit) continue;
-          const rank = scanCandidateRank(s, obs);
-          const rec = { rank, idx: i, lat, lon, alt: s.topo.alt, az: s.topo.az, mag: s.mag, range: s.topo.rangeKm, sunAlt: s.sunTopo.alt, lit: s.ecl.state, visible: s.visible };
-          if (s.visible) visibleResults.push(rec);
-          else nearMissResults.push(rec);
-        }
-      }
-    }
-    const results = visibleResults.length ? visibleResults : nearMissResults;
-    results.sort((a,b) =>
-      (a.rank - b.rank) ||
-      (a.mag - b.mag) ||
-      (b.alt - a.alt) ||
-      (a.range - b.range)
-    );
-    // de-duplicate roughly by time/region after sorting, so the retained entry for
-    // each region is the brightest/best one rather than merely the highest one.
-    const picked = [];
-    for (const r of results) {
-      if (picked.length >= 8) break;
-      if (!picked.some(p => Math.abs(p.lat-r.lat)<10 && Math.abs((((p.lon-r.lon+540)%360)-180))<15 && Math.abs(p.idx-r.idx)<6*timeStride)) picked.push(r);
-    }
-    bestCache = picked;
-    if (!picked.length) {
-      els.bestResults.innerHTML = 'No coarse-grid candidates met the current darkness/altitude/lighting thresholds. Try lowering the limiting magnitude or minimum altitude, or load real Horizons data first.';
+    const sampleSec = Math.max(1, (eph.dates[1] - eph.dates[0]) / 1000 || 60);
+    const coarseStride = Math.max(1, Math.round((5*60) / sampleSec));
+
+    let best = scanWindowForBest(null, obsBase, {
+      i0: 0, i1: eph.times.length - 1, iStep: coarseStride,
+      lat0: -85, lat1: 85, latStep: 5,
+      lon0: -180, lon1: 175, lonStep: 5,
+    });
+
+    if (!best) {
+      bestCache = [];
+      els.bestResults.innerHTML = 'No global candidates met the current minimum altitude, darkness, and spacecraft-illumination thresholds. Try lowering the minimum altitude or using a less strict dark limit.';
       return;
     }
-    const note = visibleResults.length ? '' : '<div class="muted small">No candidates met the current limiting-magnitude setting; showing the least-bad geometrical near misses instead.</div>';
-    els.bestResults.innerHTML = note + picked.map((r, n) => {
-      const date = fmt.format(eph.dates[r.idx]).replace(' UTC','');
-      const tag = r.visible ? '' : ' · faint';
-      return `<div class="best-row"><div class="best-rank">${n+1}</div><div><strong>${date} UTC</strong><br>lat ${r.lat.toFixed(1)}°, lon ${r.lon.toFixed(1)}°E · alt ${r.alt.toFixed(1)}°, az ${r.az.toFixed(0)}° · Sun ${r.sunAlt.toFixed(1)}° · ${r.lit}${tag}</div><div>mag ${r.mag.toFixed(1)}<br>${Math.round(r.range).toLocaleString()} km</div></div>`;
-    }).join('');
+
+    els.bestResults.textContent = 'Refining around the best coarse-grid point…';
+    best = refineBestCandidate(best, obsBase, sampleSec, coarseStride);
+    bestCache = best ? [best] : [];
+
+    if (!best) {
+      els.bestResults.innerHTML = 'No refined candidate survived the current thresholds.';
+      return;
+    }
+
+    const date = fmt.format(eph.dates[best.idx]).replace(' UTC','');
+    const lonText = `${best.lon.toFixed(2)}°E`;
+    const limitNote = best.visible
+      ? `brighter than current limiting mag ${obsBase.magLimit.toFixed(1)}`
+      : `fainter than current limiting mag ${obsBase.magLimit.toFixed(1)}`;
+    const stepText = sampleSec < 60 ? `${sampleSec.toFixed(0)} s` : `${(sampleSec/60).toFixed(1)} min`;
+    els.bestResults.innerHTML = `
+      <div class="muted small">Single global optimum from a 5° / 5-minute coarse scan, then local refinement to about 0.05° and the native ${stepText} ephemeris cadence. Constraints: altitude ≥ ${obsBase.minAlt.toFixed(0)}°, Sun altitude ≤ ${obsBase.darkLimit.toFixed(1)}°, spacecraft sunlit.</div>
+      <div class="best-row">
+        <div class="best-rank">★</div>
+        <div><strong>${date} UTC</strong><br>lat ${best.lat.toFixed(2)}°, lon ${lonText} · alt ${best.alt.toFixed(1)}°, az ${best.az.toFixed(0)}° · Sun ${best.sunAlt.toFixed(1)}° · ${best.lit}<br><span class="muted small">${limitNote}</span></div>
+        <div>mag ${best.mag.toFixed(2)}<br>${Math.round(best.range).toLocaleString()} km</div>
+      </div>`;
   }, 25);
 }
 

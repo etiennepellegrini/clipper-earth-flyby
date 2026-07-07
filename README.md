@@ -10,7 +10,7 @@ The app shows:
 - spacecraft illumination / Earth-shadow state,
 - a rough adjustable apparent-magnitude proxy,
 - a synced 3D Earth-centered geometry panel with Sun-on-edge direction, Earth day/night shading, and shadow geometry,
-- a coarse global “best spot” scan,
+- a refined global “best spot” scan that returns the single brightest rough-magnitude candidate,
 - PWA metadata + service worker for GitHub Pages / phone install.
 
 ## Important data note
@@ -62,10 +62,10 @@ Commit all files, including `data/clipper_ega.json` after you regenerate it from
 After replacing the demo ephemeris with Horizons data:
 
 ```bash
-python scripts/analyze_visibility.py --data data/clipper_ega.json --time-step-min 2 --lat-step 2 --lon-step 2
+python scripts/analyze_visibility.py --data data/clipper_ega.json
 ```
 
-This prints a coarse list of promising location/time candidates. The browser app’s **Scan Earth** button does a similar scan interactively.
+This prints the single best refined candidate found by a 5°/5-minute coarse global scan followed by local refinement to about 0.05° and the native ephemeris cadence. The browser app’s **Scan Earth** button does the same search interactively.
 
 ## Model assumptions
 
@@ -80,6 +80,6 @@ This prints a coarse list of promising location/time candidates. The browser app
 1. Run `scripts/fetch_horizons.py` to generate real data.
 2. Start the app locally and click **Jump closest sample**.
 3. Try Santa Monica and Strasbourg presets.
-4. Click **Scan Earth** with a reasonable minimum altitude and limiting magnitude.
+4. Click **Scan Earth** with a reasonable minimum altitude and limiting magnitude; it will return one refined global best, not a neighbor list.
 5. Adjust the brightness model to test optimistic/pessimistic assumptions.
 6. Take screenshots from the browser once the view looks useful.

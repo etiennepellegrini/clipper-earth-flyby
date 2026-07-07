@@ -1,30 +1,32 @@
 #!/usr/bin/env python3
-"""CLI coarse visibility scan for data/clipper_ega.json.
+"""CLI refined best-spot visibility scan for data/clipper_ega.json.
 
-The browser app has the same idea interactively; this script is useful after
-fetching real Horizons vectors when you want a quick terminal-ranked list.
+The browser app runs the same idea interactively: first scan a coarse global
+lat/lon/time grid, then refine around the best rough-magnitude candidate.
 """
 from __future__ import annotations
 import argparse, json, math
 from datetime import datetime, timezone
 from pathlib import Path
 
-RE_KM=6378.137; RSUN_KM=695700
+RE_KM = 6378.137
+RSUN_KM = 695700
 
-def rad(d): return d*math.pi/180
 
-def deg(r): return r*180/math.pi
+def rad(d): return d * math.pi / 180
+
+def deg(r): return r * 180 / math.pi
 
 def norm(v): return math.sqrt(sum(x*x for x in v))
 def dot(a,b): return sum(x*y for x,y in zip(a,b))
 def sub(a,b): return [x-y for x,y in zip(a,b)]
 def mul(a,k): return [x*k for x in a]
 def unit(v):
-    n=norm(v) or 1
+    n = norm(v) or 1
     return [x/n for x in v]
-def angle(a,b): return math.acos(max(-1,min(1,dot(unit(a),unit(b)))))
-def jd(dt): return dt.timestamp()/86400+2440587.5
-def gmst(dt): return rad((280.46061837+360.98564736629*(jd(dt)-2451545.0))%360)
+def angle(a,b): return math.acos(max(-1, min(1, dot(unit(a), unit(b)))))
+def jd(dt): return dt.timestamp()/86400 + 2440587.5
+def gmst(dt): return rad((280.46061837 + 360.98564736629*(jd(dt)-2451545.0)) % 360)
 def eci_to_ecef(v,dt):
     th=gmst(dt); c=math.cos(th); s=math.sin(th)
     return [c*v[0]+s*v[1], -s*v[0]+c*v[1], v[2]]
@@ -52,52 +54,98 @@ def eclipse(sc,sun):
     return 'sunlit',1
 def lambert(a): return max(0,(math.sin(a)+(math.pi-a)*math.cos(a))/math.pi)
 def magnitude(sc,sun,range_km,area_m2,albedo,frac):
-    alpha=angle(sub(sun,sc),mul(sc,-1)); ratio=max(1e-30,frac*albedo*(area_m2/1e6)*lambert(alpha)/(math.pi*range_km*range_km))
+    alpha=angle(sub(sun,sc),mul(sc,-1))
+    ratio=max(1e-30,frac*albedo*(area_m2/1e6)*lambert(alpha)/(math.pi*range_km*range_km))
     return -26.74-2.5*math.log10(ratio)
 def parse_time(s): return datetime.fromisoformat(s.replace('Z','+00:00')).astimezone(timezone.utc)
+def normalize_lon(lon): return ((lon + 540) % 360) - 180
+
+
+def make_record(i, lat, lon, dates, sc, sun, args):
+    i=max(0, min(len(dates)-1, int(round(i))))
+    lat=max(-89.5, min(89.5, lat))
+    lon=normalize_lon(lon)
+    alt,az,rg=topo(sc[i],lat,lon,0,dates[i])
+    sun_alt,_,_=topo(sun[i],lat,lon,0,dates[i])
+    state,frac=eclipse(sc[i],sun[i])
+    if alt < args.min_alt or sun_alt > args.dark_limit or frac <= 0:
+        return None
+    mag=magnitude(sc[i],sun[i],rg,args.area,args.albedo,frac)
+    return dict(i=i, t=dates[i], lat=lat, lon=lon, alt=alt, az=az, sun_alt=sun_alt, state=state, mag=mag, rg=rg, visible=mag <= args.mag_limit)
+
+
+def better(a, b):
+    if a is None: return False
+    if b is None: return True
+    # Lower astronomical magnitude is brighter.  Altitude, darkness, and sunlit
+    # state are hard filters; these only break near-ties.
+    if abs(a['mag'] - b['mag']) > 0.02: return a['mag'] < b['mag']
+    if abs(a['alt'] - b['alt']) > 0.5: return a['alt'] > b['alt']
+    if abs(a['sun_alt'] - b['sun_alt']) > 0.5: return a['sun_alt'] < b['sun_alt']
+    return a['rg'] < b['rg']
+
+
+def scan_window(best, dates, sc, sun, args, *, i0, i1, i_step, lat0, lat1, lat_step, lon0, lon1, lon_step):
+    i0=max(0, int(round(i0))); i1=min(len(dates)-1, int(round(i1))); i_step=max(1, int(round(i_step)))
+    i=i0
+    while i <= i1:
+        lat=lat0
+        while lat <= lat1 + 1e-9:
+            lon=lon0
+            while lon <= lon1 + 1e-9:
+                rec=make_record(i, lat, lon, dates, sc, sun, args)
+                if better(rec, best): best=rec
+                lon += lon_step
+            lat += lat_step
+        i += i_step
+    return best
+
+
+def refine(best, dates, sc, sun, args, sample_sec, coarse_stride):
+    if best is None: return None
+    one_min=max(1, round(60/sample_sec))
+    passes=[
+        dict(lat_span=6, lon_span=6, lat_step=1, lon_step=1, idx_span=coarse_stride, idx_step=one_min),
+        dict(lat_span=1.2, lon_span=1.2, lat_step=.2, lon_step=.2, idx_span=5*one_min, idx_step=1),
+        dict(lat_span=.3, lon_span=.3, lat_step=.05, lon_step=.05, idx_span=one_min, idx_step=1),
+    ]
+    for p in passes:
+        best=scan_window(best, dates, sc, sun, args,
+            i0=best['i']-p['idx_span'], i1=best['i']+p['idx_span'], i_step=p['idx_step'],
+            lat0=best['lat']-p['lat_span'], lat1=best['lat']+p['lat_span'], lat_step=p['lat_step'],
+            lon0=best['lon']-p['lon_span'], lon1=best['lon']+p['lon_span'], lon_step=p['lon_step'])
+    return best
+
 
 def main():
     ap=argparse.ArgumentParser()
     ap.add_argument('--data',default='data/clipper_ega.json')
-    ap.add_argument('--lat-step',type=float,default=5)
-    ap.add_argument('--lon-step',type=float,default=5)
-    ap.add_argument('--time-step-min',type=float,default=5)
     ap.add_argument('--dark-limit',type=float,default=-6)
     ap.add_argument('--min-alt',type=float,default=10)
     ap.add_argument('--mag-limit',type=float,default=6.5)
     ap.add_argument('--area',type=float,default=140)
     ap.add_argument('--albedo',type=float,default=.22)
-    ap.add_argument('-n',type=int,default=12)
     args=ap.parse_args()
     data=json.loads(Path(args.data).read_text())
     dates=[parse_time(t) for t in data['times']]
     sc=data['clipper_eci_km']; sun=data['sun_eci_km']
-    if len(dates)>1: native=(dates[1]-dates[0]).total_seconds()/60
-    else: native=args.time_step_min
-    stride=max(1,round(args.time_step_min/native))
-    results=[]
-    lat=-70
-    while lat<=70+1e-9:
-        lon=-180
-        while lon<180-1e-9:
-            for i in range(0,len(dates),stride):
-                alt,az,rg=topo(sc[i],lat,lon,0,dates[i]); sun_alt,_,_=topo(sun[i],lat,lon,0,dates[i]); state,frac=eclipse(sc[i],sun[i]); mag=magnitude(sc[i],sun[i],rg,args.area,args.albedo,frac)
-                if alt>=args.min_alt and sun_alt<=args.dark_limit and frac>0:
-                    low_alt_pen=max(0,30-alt)*0.035
-                    twilight_pen=(sun_alt+12)*0.08 if sun_alt>-12 else 0
-                    penumbra_pen=(1-frac)*2
-                    rank=mag+low_alt_pen+twilight_pen+penumbra_pen
-                    visible=mag<=args.mag_limit
-                    results.append((0 if visible else 1,rank,dates[i],lat,lon,alt,az,sun_alt,state,mag,rg))
-            lon+=args.lon_step
-        lat+=args.lat_step
-    results.sort(key=lambda x:(x[0],x[1],x[9],-x[5],x[10]))
-    picked=[]
-    for r in results:
-        if len(picked)>=args.n: break
-        if not any(abs(p[3]-r[3])<10 and abs(((p[4]-r[4]+540)%360)-180)<15 and abs((p[2]-r[2]).total_seconds())<1800 for p in picked): picked.append(r)
-    print('source:',data.get('metadata',{}).get('source'))
-    for k,r in enumerate(picked,1):
-        _,_,t,lat,lon,alt,az,sun_alt,state,mag,rg=r
-        print(f'{k:2d}. {t.isoformat().replace("+00:00","Z")}  lat={lat:6.1f} lonE={lon:7.1f}  alt={alt:5.1f} az={az:6.1f}  Sun={sun_alt:5.1f}  {state:8s}  mag~{mag:4.1f} range={rg:,.0f} km')
+    sample_sec=(dates[1]-dates[0]).total_seconds() if len(dates)>1 else 60
+    coarse_stride=max(1, round(5*60/sample_sec))
+    best=scan_window(None, dates, sc, sun, args,
+        i0=0, i1=len(dates)-1, i_step=coarse_stride,
+        lat0=-85, lat1=85, lat_step=5,
+        lon0=-180, lon1=175, lon_step=5)
+    best=refine(best, dates, sc, sun, args, sample_sec, coarse_stride)
+    print('source:', data.get('metadata',{}).get('source'))
+    if best is None:
+        print('No candidate met the altitude, darkness, and spacecraft-illumination constraints.')
+        return
+    visibility='brighter than' if best['visible'] else 'fainter than'
+    print(f"Best refined candidate ({visibility} limiting mag {args.mag_limit:.1f}):")
+    print(f"  time: {best['t'].isoformat().replace('+00:00','Z')}")
+    print(f"  lat/lon: {best['lat']:.2f}, {best['lon']:.2f}°E")
+    print(f"  alt/az: {best['alt']:.1f}°, {best['az']:.1f}°")
+    print(f"  Sun alt: {best['sun_alt']:.1f}°; spacecraft: {best['state']}")
+    print(f"  rough mag: {best['mag']:.2f}; range: {best['rg']:,.0f} km")
+
 if __name__=='__main__': main()
