@@ -1,4 +1,4 @@
-const CACHE_NAME = 'clipper-flyby-v1';
+const CACHE_NAME = 'clipper-flyby-v3';
 const ASSETS = [
   './',
   './index.html',

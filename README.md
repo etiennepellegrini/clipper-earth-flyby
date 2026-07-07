@@ -9,7 +9,7 @@ The app shows:
 - ground darkness via local Sun altitude,
 - spacecraft illumination / Earth-shadow state,
 - a rough adjustable apparent-magnitude proxy,
-- a synced compressed 3D Earth-centered geometry panel,
+- a synced 3D Earth-centered geometry panel with Sun-on-edge direction, Earth day/night shading, and shadow geometry,
 - a coarse global “best spot” scan,
 - PWA metadata + service worker for GitHub Pages / phone install.
 
@@ -73,7 +73,7 @@ This prints a coarse list of promising location/time candidates. The browser app
 - Ground darkness is judged by Sun altitude; default is civil twilight (`Sun altitude <= -6°`).
 - Spacecraft illumination uses an angular Earth/Sun disk eclipse test from the spacecraft.
 - Optical magnitude is only a rough diffuse reflecting-area model. Real visibility can be dominated by spacecraft attitude, glints, phase behavior, optics, local sky brightness, and weather.
-- The 3D panel compresses distances nonlinearly so Earth and the full path can fit together.
+- The 3D panel has two scales. Near-pass scale prioritizes the close Earth encounter and may let distant trajectory segments leave the frame; compressed mode fits the full ±window. Earth day/night shading is computed from the actual Earth-to-Sun vector in the current view, and the Sun is shown on the edge of the box as “far away that way.”
 
 ## Suggested workflow
 

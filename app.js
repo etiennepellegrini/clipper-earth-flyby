@@ -267,12 +267,15 @@ function drawGeometry() {
   const cx = mode === 'near' ? w * 0.58 : w / 2;
   const cy = h * 0.53;
   const earthR = mode === 'near' ? scale / nearViewER : 46;
-  const sunDir = unit(now.sun);
+  const sunDir = unit(now.sun);                 // Earth -> Sun, inertial
+  const sunView = unit(project3(sunDir));       // Earth -> Sun, current view frame
+  const sunScreen = screenVector(sunView);      // Earth -> Sun, screen x/y
+  const antiSunScreen = [-sunScreen[0], -sunScreen[1]];
 
   // Star speckles: deterministic from canvas size, no runtime assets.
   ctx.save();
   ctx.globalAlpha = 0.45;
-  for (let n=0; n<120; n++) {
+  for (let n=0; n<130; n++) {
     const x = ((n * 97) % w), y = ((n * 53 + 31) % h), r = ((n * 17) % 4) / 8 + 0.3;
     ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2); ctx.fillStyle = n % 9 === 0 ? 'rgba(255,231,168,.9)' : 'rgba(220,240,255,.8)'; ctx.fill();
   }
@@ -303,18 +306,23 @@ function drawGeometry() {
     return pts;
   }
 
+  // Put the Sun on the edge of the frame, instead of a floating vector arrow.
+  // It means: “the Sun is far away in this screen direction.” If the current camera
+  // looks almost exactly along the Sun line, the label says it is mostly into/out of the screen.
+  const sunAtEdge = edgePoint(cx, cy, sunScreen[0], sunScreen[1], w, h, 34, sunScreen[2]);
+  drawFarSun(ctx, sunAtEdge.x, sunAtEdge.y, sunAtEdge.inScreenLabel || (sunView[2] >= 0 ? 'Sun far away that way' : 'Sun far away behind view'));
+  drawSunbeams(ctx, sunAtEdge.x, sunAtEdge.y, cx, cy, sunScreen);
+
   // Reference planes: ecliptic and equator, to separate Solar-System geometry from the local horizon view.
   const eps = rad(23.439291111);
   const eclB1 = [1,0,0], eclB2 = [0,Math.cos(eps),Math.sin(eps)];
-  drawPolyline(greatCirclePoints(eclB1, eclB2, mode === 'near' ? 0.92 : 0.78), 'rgba(255,211,110,.42)', 1.4, [6,5]);
-  drawPolyline(greatCirclePoints([1,0,0], [0,1,0], mode === 'near' ? 0.74 : 0.62), 'rgba(129,212,255,.18)', 1.1, [3,7]);
+  drawPolyline(greatCirclePoints(eclB1, eclB2, mode === 'near' ? 0.92 : 0.78), 'rgba(255,211,110,.34)', 1.2, [6,5]);
+  drawPolyline(greatCirclePoints([1,0,0], [0,1,0], mode === 'near' ? 0.74 : 0.62), 'rgba(129,212,255,.15)', 1.0, [3,7]);
 
-  // Earth shadow cylinder/cone approximation, drawn behind Earth and along the anti-solar direction.
-  const sh = mapNorm(mul(sunDir, -0.92));
-  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(sh.x, sh.y);
-  ctx.strokeStyle = 'rgba(70,45,120,.18)'; ctx.lineWidth = earthR * 2.05; ctx.lineCap = 'butt'; ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(sh.x, sh.y);
-  ctx.strokeStyle = 'rgba(182,144,255,.34)'; ctx.lineWidth = 1.5; ctx.setLineDash([8,6]); ctx.stroke(); ctx.setLineDash([]);
+  // Earth shadow cylinder/cone approximation, behind Earth and opposite the Sun.
+  // This now matches the Earth night side: Sun is on one side of the canvas; shadow extends the other way.
+  const shEdge = edgePoint(cx, cy, antiSunScreen[0], antiSunScreen[1], w, h, 18);
+  drawEarthShadow(ctx, cx, cy, shEdge.x, shEdge.y, earthR);
 
   // Spacecraft path. Near mode intentionally lets distant samples leave the frame; compressed mode fits all samples.
   let last = null;
@@ -324,46 +332,180 @@ function drawGeometry() {
     const s = sampleAt(i, obs);
     if (last) {
       ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p.x, p.y);
-      ctx.strokeStyle = colorFor(last.cls, last.cls === 'visible' ? .9 : .50);
+      ctx.strokeStyle = colorFor(last.cls, last.cls === 'visible' ? .9 : .52);
       ctx.lineWidth = last.cls === 'visible' ? 2.6 : 1.8;
       ctx.stroke();
     }
     last = { ...p, cls: pathClass(s) };
   }
 
-  // Earth with simple sun-side lighting.
-  const sunProj = project3(sunDir);
-  const gx = cx + sunProj[0]*earthR*.58, gy = cy - sunProj[1]*earthR*.58;
-  const earthGrad = ctx.createRadialGradient(gx, gy, Math.max(2, earthR*.06), cx, cy, earthR*1.1);
-  earthGrad.addColorStop(0, '#99dbff'); earthGrad.addColorStop(.35, '#2d7fbd'); earthGrad.addColorStop(.70, '#0c2a4e'); earthGrad.addColorStop(1, '#020713');
-  ctx.beginPath(); ctx.arc(cx, cy, earthR, 0, Math.PI*2); ctx.fillStyle = earthGrad; ctx.fill();
-  ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(220,240,255,.48)'; ctx.stroke();
-  // Subsolar point.
-  ctx.beginPath(); ctx.arc(cx + sunProj[0]*earthR*.96, cy - sunProj[1]*earthR*.96, 4.5, 0, Math.PI*2); ctx.fillStyle = 'rgba(255,211,110,.95)'; ctx.fill();
+  // Real Sun/Earth geometry for the lit and dark side of Earth. The pixel shader is
+  // not a texture; each visible surface point is colored by dot(surfaceNormal, Earth→Sun).
+  drawShadedEarth(ctx, cx, cy, earthR, sunView);
+  drawTerminator(ctx, cx, cy, earthR, sunView);
 
-  // Observer on Earth and zenith direction.
+  // Subsolar point only if it is on the visible hemisphere in this camera view.
+  if (sunView[2] > 0) {
+    ctx.beginPath(); ctx.arc(cx + sunView[0]*earthR*.96, cy - sunView[1]*earthR*.96, 4.5, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(255,226,132,.98)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(40,25,5,.55)'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillStyle = 'rgba(255,241,198,.85)'; ctx.font = '11px system-ui, sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('subsolar', cx + sunView[0]*earthR*1.25, cy - sunView[1]*earthR*1.25);
+  }
+
+  // Observer on Earth and zenith direction. If the observer is on the back side of the globe in
+  // the current camera angle, show it muted/dashed so it doesn't read as being on the front face.
   const obsVec = observerEci(obs.lat, obs.lon, obs.height, now.date);
+  const obsFront = project3(unit(obsVec))[2] >= 0;
   const op = mapRaw(obsVec);
   const zen = mapRaw(mul(unit(obsVec), RE_KM * 1.85));
-  ctx.beginPath(); ctx.moveTo(op.x, op.y); ctx.lineTo(zen.x, zen.y); ctx.strokeStyle = 'rgba(255,255,255,.32)'; ctx.lineWidth = 1.2; ctx.stroke();
-  ctx.beginPath(); ctx.arc(op.x, op.y, 5.5, 0, Math.PI*2); ctx.fillStyle = '#ffffff'; ctx.fill();
-  ctx.strokeStyle = 'rgba(0,0,0,.6)'; ctx.stroke();
+  ctx.save();
+  ctx.globalAlpha = obsFront ? 1 : 0.35;
+  if (!obsFront) ctx.setLineDash([5,5]);
+  ctx.beginPath(); ctx.moveTo(op.x, op.y); ctx.lineTo(zen.x, zen.y); ctx.strokeStyle = obsFront ? 'rgba(255,255,255,.36)' : 'rgba(255,255,255,.22)'; ctx.lineWidth = 1.2; ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.beginPath(); ctx.arc(op.x, op.y, 5.5, 0, Math.PI*2); ctx.fillStyle = obsFront ? '#ffffff' : 'rgba(255,255,255,.55)'; ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.stroke();
+  ctx.restore();
 
   // Current spacecraft marker.
   const sp = mapRaw(now.sc);
+  const behindEarth = sp.z < 0 && Math.hypot(sp.x - cx, sp.y - cy) < earthR;
+  ctx.save();
+  if (behindEarth) ctx.globalAlpha = 0.38;
   ctx.beginPath(); ctx.arc(sp.x, sp.y, 8.5, 0, Math.PI*2); ctx.fillStyle = now.visible ? '#74f0a8' : '#ffd36e'; ctx.fill();
-  ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.stroke();
-  ctx.fillStyle = 'rgba(235,246,255,.88)'; ctx.font = '14px system-ui, sans-serif'; ctx.textAlign = 'left';
-  ctx.fillText('Europa Clipper', sp.x + 12, sp.y + 4);
+  ctx.lineWidth = 2; ctx.strokeStyle = behindEarth ? 'rgba(255,255,255,.55)' : 'rgba(255,255,255,.9)'; ctx.stroke();
+  ctx.fillStyle = behindEarth ? 'rgba(235,246,255,.54)' : 'rgba(235,246,255,.88)'; ctx.font = '14px system-ui, sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText(behindEarth ? 'Europa Clipper (behind Earth)' : 'Europa Clipper', sp.x + 12, sp.y + 4);
+  ctx.restore();
 
-  // Sun arrow and labels.
-  const sd = project3(sunDir);
-  arrow(ctx, 60, 56, 60 + sd[0]*58, 56 - sd[1]*58, '#ffd36e');
-  ctx.fillStyle = '#fff1c6'; ctx.font = '13px system-ui, sans-serif'; ctx.textAlign = 'left'; ctx.fillText('Sun direction', 84, 58);
   const labelE = mapNorm(add(mul(eclB1, mode === 'near' ? 0.70 : 0.60), mul(eclB2, mode === 'near' ? 0.52 : 0.42)));
-  ctx.fillStyle = 'rgba(255,231,168,.75)'; ctx.font = '12px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.fillText('ecliptic plane', labelE.x, labelE.y);
+  ctx.fillStyle = 'rgba(255,231,168,.70)'; ctx.font = '12px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.fillText('ecliptic plane', labelE.x, labelE.y);
   ctx.fillStyle = 'rgba(220,235,250,.68)'; ctx.font = '12px system-ui, sans-serif'; ctx.textAlign = 'center';
-  ctx.fillText(mode === 'near' ? 'near-Earth scale; distant path may extend offscreen' : 'log-compressed full ±window geometry', cx, h - 16);
+  ctx.fillText(mode === 'near' ? 'near-Earth scale; Sun on edge; Earth day/night uses real Sun geometry' : 'log-compressed full ±window geometry; day/night uses real Sun geometry', cx, h - 16);
+}
+
+function screenVector(viewDir) {
+  let vx = viewDir[0], vy = -viewDir[1];
+  const m = Math.hypot(vx, vy);
+  if (m < 0.08) return [0.92, -0.38, true];
+  return [vx/m, vy/m, false];
+}
+function edgePoint(cx, cy, vx, vy, w, h, margin=28, mostlyInScreen=false) {
+  const xlim = vx > 0 ? (w - margin - cx) / vx : vx < 0 ? (margin - cx) / vx : Infinity;
+  const ylim = vy > 0 ? (h - margin - cy) / vy : vy < 0 ? (margin - cy) / vy : Infinity;
+  const t = Math.max(0, Math.min(xlim, ylim));
+  return { x: cx + vx*t, y: cy + vy*t, inScreenLabel: mostlyInScreen ? 'Sun mostly along view line' : '' };
+}
+function drawFarSun(ctx, x, y, label) {
+  const g = ctx.createRadialGradient(x, y, 4, x, y, 54);
+  g.addColorStop(0, 'rgba(255,244,184,1)');
+  g.addColorStop(.18, 'rgba(255,211,110,.92)');
+  g.addColorStop(1, 'rgba(255,211,110,0)');
+  ctx.beginPath(); ctx.arc(x, y, 58, 0, Math.PI*2); ctx.fillStyle = g; ctx.fill();
+  ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI*2); ctx.fillStyle = '#ffd36e'; ctx.fill();
+  ctx.strokeStyle = 'rgba(255,244,184,.9)'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.fillStyle = 'rgba(255,241,198,.92)'; ctx.font = '13px system-ui, sans-serif'; ctx.textAlign = x < 90 ? 'left' : 'right';
+  ctx.fillText(label, x < 90 ? x + 18 : x - 18, y + 4);
+}
+function drawSunbeams(ctx, sunX, sunY, cx, cy, sunScreen) {
+  const dx = cx - sunX, dy = cy - sunY;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len;
+  const px = -uy, py = ux;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,211,110,.34)';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([9, 8]);
+  for (const off of [-42, 0, 42]) {
+    const x1 = sunX + px * off, y1 = sunY + py * off;
+    const x2 = cx - ux * 35 + px * off * .25, y2 = cy - uy * 35 + py * off * .25;
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  }
+  ctx.restore();
+}
+function drawEarthShadow(ctx, cx, cy, x2, y2, earthR) {
+  const dx = x2 - cx, dy = y2 - cy;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len;
+  const px = -uy, py = ux;
+  const nearW = earthR * 1.92, farW = earthR * 1.25;
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(cx + px*nearW/2, cy + py*nearW/2);
+  ctx.lineTo(x2 + px*farW/2, y2 + py*farW/2);
+  ctx.lineTo(x2 - px*farW/2, y2 - py*farW/2);
+  ctx.lineTo(cx - px*nearW/2, cy - py*nearW/2);
+  ctx.closePath();
+  const g = ctx.createLinearGradient(cx, cy, x2, y2);
+  g.addColorStop(0, 'rgba(20,12,48,.44)');
+  g.addColorStop(1, 'rgba(20,12,48,0)');
+  ctx.fillStyle = g; ctx.fill();
+  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(x2, y2);
+  ctx.strokeStyle = 'rgba(182,144,255,.30)'; ctx.lineWidth = 1.2; ctx.setLineDash([8,6]); ctx.stroke();
+  ctx.fillStyle = 'rgba(207,190,255,.68)'; ctx.font = '12px system-ui, sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('Earth shadow', cx + ux*earthR*2.1, cy + uy*earthR*2.1 - 8);
+  ctx.restore();
+}
+function drawShadedEarth(ctx, cx, cy, R, sunView) {
+  const l = unit(sunView);
+  const minX = Math.floor(cx - R - 2), minY = Math.floor(cy - R - 2);
+  const size = Math.ceil(2 * R + 4);
+  const img = ctx.createImageData(size, size);
+  const data = img.data;
+  for (let j=0; j<size; j++) {
+    for (let i=0; i<size; i++) {
+      const sx = minX + i + 0.5, sy = minY + j + 0.5;
+      const nx = (sx - cx) / R, ny = -(sy - cy) / R;
+      const rr = nx*nx + ny*ny;
+      const p = 4 * (j*size + i);
+      if (rr > 1) { data[p+3] = 0; continue; }
+      const nz = Math.sqrt(Math.max(0, 1 - rr));
+      const illum = nx*l[0] + ny*l[1] + nz*l[2];
+      const limb = Math.pow(Math.max(0, nz), 0.55);
+      const pseudoCloud = 0.08 * Math.sin(19*nx + 9*ny) + 0.05 * Math.sin(31*(nx*nx - ny));
+      let r,g,b,a=255;
+      if (illum > 0) {
+        const day = Math.pow(Math.min(1, illum), 0.45);
+        r = 18 + 110*day + 18*pseudoCloud;
+        g = 55 + 150*day + 22*pseudoCloud;
+        b = 92 + 145*day + 30*pseudoCloud;
+      } else {
+        const night = Math.pow(Math.min(1, -illum), 0.5);
+        r = 3 + 9*(1-night);
+        g = 8 + 18*(1-night);
+        b = 20 + 34*(1-night);
+      }
+      const atm = Math.pow(1 - Math.max(0, nz), 2.2) * 55;
+      data[p] = clamp(Math.round((r + atm*0.35) * limb), 0, 255);
+      data[p+1] = clamp(Math.round((g + atm*0.65) * limb), 0, 255);
+      data[p+2] = clamp(Math.round((b + atm) * limb), 0, 255);
+      data[p+3] = a;
+    }
+  }
+  ctx.putImageData(img, minX, minY);
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI*2);
+  ctx.strokeStyle = 'rgba(220,240,255,.48)'; ctx.lineWidth = 1.5; ctx.stroke();
+}
+function drawTerminator(ctx, cx, cy, R, sunView) {
+  const l = unit(sunView);
+  // The terminator is the great circle where normal·sun = 0. Draw only the visible half.
+  const ref = Math.abs(l[2]) < 0.9 ? [0,0,1] : [0,1,0];
+  const b1 = unit(cross(l, ref));
+  const b2 = unit(cross(l, b1));
+  let drawing = false;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,244,184,.58)'; ctx.lineWidth = 1.6; ctx.setLineDash([4,4]);
+  for (let k=0; k<=240; k++) {
+    const t = 2*Math.PI*k/240;
+    const n = add(mul(b1, Math.cos(t)), mul(b2, Math.sin(t)));
+    if (n[2] < 0) { if (drawing) ctx.stroke(); drawing = false; continue; }
+    const x = cx + n[0]*R, y = cy - n[1]*R;
+    if (!drawing) { ctx.beginPath(); ctx.moveTo(x,y); drawing = true; }
+    else ctx.lineTo(x,y);
+  }
+  if (drawing) ctx.stroke();
+  ctx.restore();
 }
 function arrow(ctx, x1,y1,x2,y2,color) {
   ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 3; ctx.lineCap = 'round';
