@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Europa Clipper Earth Flyby Visibility</title>
+  <meta name="theme-color" content="#0b1020" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="hero">
+    <div>
+      <p class="eyebrow">Europa Clipper · Earth Gravity Assist · Dec 2026</p>
+      <h1>Can anyone see the flyby?</h1>
+      <p class="subhead">Topocentric sky path, darkness, Earth shadow, rough brightness, and a synced compressed 3D geometry view. Ephemerides are loaded from a pre-saved JSON file.</p>
+    </div>
+    <div class="status-pill" id="dataStatus">Loading ephemeris…</div>
+  </header>
+
+  <main class="layout">
+    <section class="panel controls" aria-label="Observer and time controls">
+      <div class="section-title">Observer</div>
+      <div class="grid two">
+        <label>Latitude<br><input id="lat" type="number" step="0.0001" value="34.0195"></label>
+        <label>Longitude East<br><input id="lon" type="number" step="0.0001" value="-118.4912"></label>
+        <label>Height (m)<br><input id="height" type="number" step="1" value="30"></label>
+        <label>Dark limit<br>
+          <select id="darkLimit">
+            <option value="-0.833">Sunset</option>
+            <option value="-6" selected>Civil twilight (-6°)</option>
+            <option value="-12">Nautical twilight (-12°)</option>
+            <option value="-18">Astronomical (-18°)</option>
+          </select>
+        </label>
+      </div>
+      <div class="button-row">
+        <button data-place="santaMonica">Santa Monica</button>
+        <button data-place="strasbourg">Strasbourg</button>
+        <button id="useGps">Use device GPS</button>
+      </div>
+
+      <div class="section-title">Time</div>
+      <div class="time-readout" id="timeReadout">—</div>
+      <input id="timeSlider" type="range" min="0" max="0" value="0" step="1" />
+      <div class="button-row">
+        <button id="stepBack">− step</button>
+        <button id="playPause">Play</button>
+        <button id="stepForward">+ step</button>
+        <button id="jumpClosest">Closest sample</button>
+      </div>
+      <label class="wide">Playback speed<br>
+        <input id="speed" type="range" min="1" max="120" value="20" step="1" />
+        <span id="speedLabel">20 samples/s</span>
+      </label>
+
+      <div class="section-title">Brightness model</div>
+      <div class="grid two">
+        <label>Effective reflective area (m²)<br><input id="area" type="number" min="1" max="2000" step="1" value="140"></label>
+        <label>Diffuse reflectance<br><input id="albedo" type="number" min="0.01" max="1" step="0.01" value="0.22"></label>
+        <label>Limiting mag<br><input id="magLimit" type="number" min="0" max="20" step="0.1" value="6.5"></label>
+        <label>Min altitude<br><input id="minAlt" type="number" min="0" max="80" step="1" value="10"></label>
+      </div>
+      <p class="muted small">Magnitude is a deliberately rough diffuse-area proxy. It does not model attitude, BRDF, or solar-array glints, so it is a guide for “worth trying,” not a prediction.</p>
+    </section>
+
+    <section class="panel visual-panel" aria-label="Sky view">
+      <div class="panel-header">
+        <div>
+          <div class="section-title">Sky from observer</div>
+          <p class="muted">Polar chart: center = zenith, rim = horizon, north at top, east at right.</p>
+        </div>
+        <div class="legend">
+          <span><i class="swatch visible"></i>visible-ish</span>
+          <span><i class="swatch twilight"></i>too bright</span>
+          <span><i class="swatch shadow"></i>spacecraft shadow</span>
+          <span><i class="swatch below"></i>below horizon</span>
+        </div>
+      </div>
+      <canvas id="skyCanvas" width="1000" height="760"></canvas>
+    </section>
+
+    <aside class="panel readout-panel" aria-label="Current readout and geometry">
+      <div class="section-title">Current status</div>
+      <div id="visibilityBadge" class="visibility-badge">—</div>
+      <dl class="readout" id="readout"></dl>
+
+      <div class="section-title geometry-title">Synced geometry</div>
+      <canvas id="geoCanvas" width="600" height="440"></canvas>
+      <p class="muted small">3D view uses compressed distance scaling so Earth, spacecraft, path, Sun direction, and observer fit in one box. Drag to rotate.</p>
+    </aside>
+
+    <section class="panel best-panel" aria-label="Best location scan">
+      <div class="panel-header">
+        <div>
+          <div class="section-title">Best-spot scan</div>
+          <p class="muted">Coarse global grid, ranked by altitude, darkness, illumination, range, and rough magnitude. No terrain/clouds/airspace.</p>
+        </div>
+        <div class="button-row">
+          <button id="scanBest">Scan Earth</button>
+          <button id="applyBest">Apply top result</button>
+        </div>
+      </div>
+      <div id="bestResults" class="best-results">Run the scan after loading real Horizons data.</div>
+    </section>
+
+    <section class="panel notes-panel">
+      <div class="section-title">Data/provenance notes</div>
+      <div id="provenance" class="provenance"></div>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>
