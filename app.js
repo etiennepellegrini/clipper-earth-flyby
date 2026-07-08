@@ -9,7 +9,8 @@ const PLACES = {
 };
 
 const els = {
-  dataStatus: document.getElementById('dataStatus'),
+  dataStatus: document.getElementById('dataStatus'), missionEyebrow: document.getElementById('missionEyebrow'),
+  datasetSelect: document.getElementById('datasetSelect'), datasetHint: document.getElementById('datasetHint'),
   lat: document.getElementById('lat'), lon: document.getElementById('lon'), height: document.getElementById('height'),
   darkLimit: document.getElementById('darkLimit'), timeSlider: document.getElementById('timeSlider'), timeReadout: document.getElementById('timeReadout'),
   stepBack: document.getElementById('stepBack'), stepForward: document.getElementById('stepForward'), playPause: document.getElementById('playPause'), jumpClosest: document.getElementById('jumpClosest'),
@@ -21,6 +22,7 @@ const els = {
 };
 
 let eph = null;
+let datasets = [];
 let idx = 0;
 let playTimer = null;
 let bestCache = [];
@@ -95,7 +97,7 @@ function eclipticLonLat(v) {
 }
 
 function eclipseState(sc, sun) {
-  // From spacecraft, does Earth block the Sun?
+  // From target, does Earth block the Sun?
   const toEarth = mul(sc, -1);
   const toSun = sub(sun, sc);
   const dEarth = norm(toEarth), dSun = norm(toSun);
@@ -111,7 +113,7 @@ function eclipseState(sc, sun) {
   return { state: 'sunlit', sunlit: true, fraction: 1 };
 }
 function phaseAngle(sc, sun) {
-  // Sun-spacecraft-observer angle; observer approximated at Earth center for brightness.
+  // Sun-target-observer angle; observer approximated at Earth center for brightness.
   const toSun = sub(sun, sc);
   const toObs = mul(sc, -1);
   return angle(toSun, toObs);
@@ -171,18 +173,46 @@ function colorFor(cls, alpha = 1) {
   };
   return colors[cls] || colors.faint;
 }
+
+function targetName() {
+  return eph?.meta?.target?.name || eph?.dataset?.label || 'target';
+}
+function shortTargetName() {
+  const name = targetName();
+  return name.replace(/^(Europa\s+)?/i, '').replace(/\s+Earth flyby.*$/i, '');
+}
+function prepareCanvas(canvas) {
+  const rect = canvas.getBoundingClientRect();
+  const w = Math.max(280, Math.round(rect.width || canvas.clientWidth || 700));
+  const h = Math.max(220, Math.round(rect.height || canvas.clientHeight || w * 0.75));
+  const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+  const bw = Math.round(w * dpr), bh = Math.round(h * dpr);
+  if (canvas.width !== bw || canvas.height !== bh) {
+    canvas.width = bw;
+    canvas.height = bh;
+  }
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, w, h, dpr };
+}
+function clearPrepared(ctx, w, h) {
+  ctx.clearRect(0, 0, w, h);
+}
+function safeHtml(value) {
+  return String(value ?? '').replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+}
 function drawSky() {
-  const canvas = els.sky, ctx = canvas.getContext('2d');
-  const w = canvas.width, h = canvas.height;
-  ctx.clearRect(0,0,w,h);
-  const cx = w / 2, cy = h / 2 + 16, R = Math.min(w, h) * 0.42;
+  const { ctx, w, h } = prepareCanvas(els.sky);
+  clearPrepared(ctx, w, h);
+  const mobile = w < 520;
+  const cx = w / 2, cy = h / 2 + (mobile ? 8 : 16), R = Math.min(w * 0.46, h * 0.42);
   const grd = ctx.createRadialGradient(cx, cy, 0, cx, cy, R);
   grd.addColorStop(0, 'rgba(129,212,255,.10)');
   grd.addColorStop(1, 'rgba(4,10,20,.62)');
   ctx.fillStyle = grd;
   ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI*2); ctx.fill();
   ctx.strokeStyle = 'rgba(190,215,240,.35)'; ctx.lineWidth = 2; ctx.stroke();
-  ctx.font = '22px system-ui, sans-serif'; ctx.fillStyle = 'rgba(235,246,255,.78)'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = `${mobile ? 13 : 22}px system-ui, sans-serif`; ctx.fillStyle = 'rgba(235,246,255,.78)'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   for (const alt of [30, 60]) {
     const rr = (90 - alt)/90 * R;
     ctx.beginPath(); ctx.arc(cx, cy, rr, 0, Math.PI*2); ctx.strokeStyle = 'rgba(190,215,240,.14)'; ctx.lineWidth = 1; ctx.stroke();
@@ -190,7 +220,7 @@ function drawSky() {
   }
   [['N',0],['E',90],['S',180],['W',270]].forEach(([lab, az]) => {
     const p = skyXY(0, az, cx, cy, R);
-    ctx.fillStyle = 'rgba(235,246,255,.84)'; ctx.font = '18px system-ui, sans-serif'; ctx.fillText(lab, p.x, p.y);
+    ctx.fillStyle = 'rgba(235,246,255,.84)'; ctx.font = `${mobile ? 12 : 18}px system-ui, sans-serif`; ctx.fillText(lab, p.x, p.y);
   });
   const obs = getObserver();
   let lastAbove = null;
@@ -221,8 +251,8 @@ function drawSky() {
   }
   ctx.beginPath(); ctx.arc(p.x, p.y, 10, 0, Math.PI*2); ctx.fillStyle = now.visible ? 'white' : colorFor(pathClass(now), 1); ctx.fill();
   ctx.lineWidth = 3; ctx.strokeStyle = now.visible ? 'rgba(116,240,168,1)' : 'rgba(255,255,255,.8)'; ctx.stroke();
-  ctx.fillStyle = 'rgba(235,246,255,.90)'; ctx.font = '16px system-ui, sans-serif'; ctx.textAlign = 'left';
-  ctx.fillText(currentInside ? 'Clipper' : 'Clipper below horizon', p.x + 14, p.y - 14);
+  ctx.fillStyle = 'rgba(235,246,255,.90)'; ctx.font = `${mobile ? 11 : 16}px system-ui, sans-serif`; ctx.textAlign = 'left';
+  ctx.fillText(currentInside ? shortTargetName() : `${shortTargetName()} below horizon`, p.x + 14, p.y - 14);
   // Sun marker if above/near horizon
   const sunAlt = clamp(now.sunTopo.alt, -10, 90);
   if (now.sunTopo.alt > -12) {
@@ -230,8 +260,8 @@ function drawSky() {
     ctx.beginPath(); ctx.arc(sp.x, sp.y, 8, 0, Math.PI*2); ctx.fillStyle = 'rgba(255,211,110,.95)'; ctx.fill();
     ctx.fillText('Sun', sp.x + 12, sp.y + 12);
   }
-  ctx.fillStyle = 'rgba(150,168,189,.90)'; ctx.font = '14px system-ui, sans-serif'; ctx.textAlign = 'center';
-  ctx.fillText('Horizon', cx, cy + R + 28);
+  ctx.fillStyle = 'rgba(150,168,189,.90)'; ctx.font = `${mobile ? 10 : 14}px system-ui, sans-serif`; ctx.textAlign = 'center';
+  ctx.fillText('Horizon', cx, Math.min(h - 12, cy + R + (mobile ? 18 : 28)));
 }
 function skyXY(alt, az, cx, cy, R) {
   const rr = (90 - alt) / 90 * R;
@@ -255,9 +285,8 @@ function compressVec(v, maxR) {
   return mul(unit(v), m);
 }
 function drawGeometry() {
-  const canvas = els.geo, ctx = canvas.getContext('2d');
-  const w = canvas.width, h = canvas.height;
-  ctx.clearRect(0,0,w,h);
+  const { ctx, w, h } = prepareCanvas(els.geo);
+  clearPrepared(ctx, w, h);
   const obs = getObserver();
   const now = sampleAt(idx, obs);
   const mode = els.geoScale?.value || 'near';
@@ -324,7 +353,7 @@ function drawGeometry() {
   const shEdge = edgePoint(cx, cy, antiSunScreen[0], antiSunScreen[1], w, h, 18);
   drawEarthShadow(ctx, cx, cy, shEdge.x, shEdge.y, earthR);
 
-  // Spacecraft path. Near mode intentionally lets distant samples leave the frame; compressed mode fits all samples.
+  // Target path. Near mode intentionally lets distant samples leave the frame; compressed mode fits all samples.
   let last = null;
   const stride = Math.max(1, Math.floor(eph.times.length / 900));
   for (let i=0; i<eph.times.length; i+=stride) {
@@ -368,7 +397,7 @@ function drawGeometry() {
   ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.stroke();
   ctx.restore();
 
-  // Current spacecraft marker.
+  // Current target marker.
   const sp = mapRaw(now.sc);
   const behindEarth = sp.z < 0 && Math.hypot(sp.x - cx, sp.y - cy) < earthR;
   ctx.save();
@@ -376,7 +405,7 @@ function drawGeometry() {
   ctx.beginPath(); ctx.arc(sp.x, sp.y, 8.5, 0, Math.PI*2); ctx.fillStyle = now.visible ? '#74f0a8' : '#ffd36e'; ctx.fill();
   ctx.lineWidth = 2; ctx.strokeStyle = behindEarth ? 'rgba(255,255,255,.55)' : 'rgba(255,255,255,.9)'; ctx.stroke();
   ctx.fillStyle = behindEarth ? 'rgba(235,246,255,.54)' : 'rgba(235,246,255,.88)'; ctx.font = '14px system-ui, sans-serif'; ctx.textAlign = 'left';
-  ctx.fillText(behindEarth ? 'Europa Clipper (behind Earth)' : 'Europa Clipper', sp.x + 12, sp.y + 4);
+  ctx.fillText(behindEarth ? `${shortTargetName()} (behind Earth)` : shortTargetName(), sp.x + 12, sp.y + 4);
   ctx.restore();
 
   const labelE = mapNorm(add(mul(eclB1, mode === 'near' ? 0.70 : 0.60), mul(eclB2, mode === 'near' ? 0.52 : 0.42)));
@@ -519,12 +548,12 @@ function updateReadout() {
   const reasons = [];
   if (s.topo.alt < getObserver().minAlt) reasons.push('below/min altitude');
   if (!s.dark) reasons.push('sky too bright');
-  if (!s.ecl.sunlit) reasons.push('spacecraft in Earth shadow');
+  if (!s.ecl.sunlit) reasons.push('target in Earth shadow');
   if (!s.brightEnough) reasons.push('too faint by rough model');
   let text, cls;
   if (s.visible) { text = 'Potentially visible'; cls = 'good'; }
   else if (s.topo.alt > 0 && s.dark && s.ecl.sunlit) { text = 'Geometrically visible, probably faint'; cls = 'warn'; }
-  else { text = 'Not visible: ' + reasons.join(', '); cls = 'bad'; }
+  else { text = 'Not visible: ' + (reasons.join(', ') || 'constraints not met'); cls = 'bad'; }
   els.visibilityBadge.textContent = text;
   els.visibilityBadge.className = 'visibility-badge ' + cls;
   const topoEq = equatorialRaDec(s.topo.rhoEci);
@@ -538,7 +567,7 @@ function updateReadout() {
     ['Range', `${s.topo.rangeKm.toLocaleString(undefined,{maximumFractionDigits:0})} km`],
     ['Geocentric altitude', `${s.altitudeKm.toLocaleString(undefined,{maximumFractionDigits:0})} km`],
     ['Sun altitude', `${s.sunTopo.alt.toFixed(1)}°`],
-    ['Spacecraft lighting', `${s.ecl.state}${s.ecl.state==='penumbra' ? ` (${Math.round(s.ecl.fraction*100)}%)` : ''}`],
+    ['Target lighting', `${s.ecl.state}${s.ecl.state==='penumbra' ? ` (${Math.round(s.ecl.fraction*100)}%)` : ''}`],
     ['Phase angle', `${s.alpha.toFixed(1)}°`],
     ['Rough magnitude', `${s.mag.toFixed(1)}`],
   ];
@@ -564,35 +593,99 @@ function findClosestSample() {
 }
 function provenanceHtml(meta) {
   const isDemo = meta.source && meta.source.includes('DEMO');
-  const warning = isDemo ? `<div class="warning-box"><strong>Demo ephemeris loaded.</strong> This package could not fetch Horizons from the sandbox, so the bundled <code>data/clipper_ega.json</code> is a synthetic UI demo. Run <code>python scripts/fetch_horizons.py</code> from the repo root to replace it with actual JPL Horizons vectors before making visibility conclusions.</div>` : '';
+  const datasetPath = eph?.dataset?.path || 'data/clipper_ega.json';
+  const target = meta.target || {};
+  const center = meta.center || {};
+  const id = target.horizonsId || target.command || 'unknown';
+  const warning = isDemo ? `<div class="warning-box"><strong>Demo ephemeris loaded.</strong> The bundled dataset is a synthetic UI demo. Run <code>python scripts/fetch_horizons.py</code> from the repo root to replace it with real JPL Horizons vectors before making visibility conclusions.</div>` : '';
   return `${warning}
-    <p><strong>Source:</strong> <code>${meta.source || 'unknown'}</code></p>
-    <p><strong>Target:</strong> ${meta.target?.name || 'Europa Clipper'} <code>${meta.target?.horizonsId || '-159'}</code>; <strong>center:</strong> ${meta.center?.name || 'Earth geocenter'} <code>${meta.center?.horizonsCenter || '500@399'}</code>.</p>
-    <p><strong>Generated:</strong> ${meta.generatedUtc || '—'}</p>
-    <p><strong>Frame:</strong> ${meta.frame || 'ECI-like geocentric vectors for browser-side topocentric calculations.'}</p>
-    ${meta.closestSampleUtc ? `<p><strong>Closest sampled:</strong> ${meta.closestSampleUtc}, altitude ${Number(meta.closestSampleAltitudeKm).toFixed(1)} km.</p>` : ''}
-    ${(meta.notes || []).map(n => `<p>• ${n}</p>`).join('')}`;
+    <p><strong>Dataset file:</strong> <code>${safeHtml(datasetPath)}</code></p>
+    <p><strong>Source:</strong> <code>${safeHtml(meta.source || 'unknown')}</code></p>
+    <p><strong>Target:</strong> ${safeHtml(target.name || targetName())} <code>${safeHtml(id)}</code>; <strong>center:</strong> ${safeHtml(center.name || 'Earth geocenter')} <code>${safeHtml(center.horizonsCenter || center.command || '500@399')}</code>.</p>
+    <p><strong>Generated:</strong> ${safeHtml(meta.generatedUtc || '—')}</p>
+    <p><strong>Frame:</strong> ${safeHtml(meta.frame || 'ICRF/J2000 equator, geometric geocentric vectors for browser-side topocentric calculations.')}</p>
+    ${meta.closestSampleUtc ? `<p><strong>Closest sampled:</strong> ${safeHtml(meta.closestSampleUtc)}, altitude ${Number(meta.closestSampleAltitudeKm).toFixed(1)} km.</p>` : ''}
+    ${(meta.notes || []).map(n => `<p>• ${safeHtml(n)}</p>`).join('')}`;
 }
-async function loadData() {
-  const res = await fetch('./data/clipper_ega.json', { cache: 'no-cache' });
-  if (!res.ok) throw new Error(`Could not load data/clipper_ega.json (${res.status})`);
+
+function normalizeDatasetEntry(entry, idx = 0) {
+  if (typeof entry === 'string') return { id: `dataset-${idx}`, label: entry.split('/').pop(), path: entry };
+  return {
+    id: entry.id || entry.slug || `dataset-${idx}`,
+    label: entry.label || entry.name || entry.path || `Dataset ${idx + 1}`,
+    path: entry.path || entry.url || 'data/clipper_ega.json',
+    description: entry.description || '',
+    target: entry.target || null,
+  };
+}
+
+async function loadDatasetManifest() {
+  try {
+    const res = await fetch('./data/datasets.json', { cache: 'no-cache' });
+    if (!res.ok) throw new Error('no manifest');
+    const manifest = await res.json();
+    const list = Array.isArray(manifest) ? manifest : (manifest.datasets || []);
+    datasets = list.map(normalizeDatasetEntry);
+  } catch {
+    datasets = [{ id: 'clipper-ega-2026', label: 'Europa Clipper · Earth gravity assist · Dec 2026', path: 'data/clipper_ega.json', description: 'Fallback built-in dataset.' }];
+  }
+  if (!datasets.length) datasets = [{ id: 'clipper-ega-2026', label: 'Europa Clipper · Earth gravity assist · Dec 2026', path: 'data/clipper_ega.json' }];
+  els.datasetSelect.innerHTML = datasets.map((d, i) => `<option value="${i}">${safeHtml(d.label)}</option>`).join('');
+}
+
+function applyDatasetDefaults(data) {
+  const defaults = data.metadata?.uiDefaults || data.uiDefaults || {};
+  if (defaults.areaM2 != null) els.area.value = defaults.areaM2;
+  if (defaults.albedo != null) els.albedo.value = defaults.albedo;
+  if (defaults.magLimit != null) els.magLimit.value = defaults.magLimit;
+  if (defaults.minAltDeg != null) els.minAlt.value = defaults.minAltDeg;
+  if (defaults.darkLimitDeg != null) els.darkLimit.value = defaults.darkLimitDeg;
+}
+
+async function loadDataset(datasetIndex = 0) {
+  const dataset = datasets[datasetIndex] || datasets[0];
+  els.dataStatus.textContent = 'Loading ephemeris…';
+  els.dataStatus.className = 'status-pill';
+  els.bestResults.textContent = 'Run the scan after loading a Horizons dataset.';
+  bestCache = [];
+  const path = dataset.path.replace(/^\.\//, '');
+  const res = await fetch(path, { cache: 'no-cache' });
+  if (!res.ok) throw new Error(`Could not load ${path} (${res.status})`);
   const data = await res.json();
+  const objectVectors = data.object_eci_km || data.target_eci_km || data.clipper_eci_km;
+  if (!Array.isArray(data.times) || !Array.isArray(objectVectors) || !Array.isArray(data.sun_eci_km)) {
+    throw new Error(`${path} does not look like a supported flyby dataset.`);
+  }
   eph = {
+    dataset,
     meta: data.metadata || {},
     times: data.times,
     dates: data.times.map(t => new Date(t)),
-    sc: data.clipper_eci_km,
+    sc: objectVectors,
     sun: data.sun_eci_km,
   };
   eph.rangeSamples = eph.sc.map(norm);
+  applyDatasetDefaults(data);
   els.timeSlider.max = eph.times.length - 1;
   idx = findClosestSample();
   els.timeSlider.value = idx;
   const isDemo = (eph.meta.source || '').includes('DEMO');
-  els.dataStatus.textContent = isDemo ? 'Demo ephemeris · replace with Horizons' : `Horizons data · ${eph.times.length} samples`;
+  els.dataStatus.textContent = isDemo ? 'Demo ephemeris · replace with Horizons' : `${targetName()} · ${eph.times.length} samples`;
   els.dataStatus.className = 'status-pill ' + (isDemo ? 'warn' : 'good');
+  const ca = eph.meta.closestSampleUtc ? ` · closest sample ${eph.meta.closestSampleUtc.replace('T',' ').replace('Z',' UTC')}` : '';
+  els.missionEyebrow.textContent = `${targetName()}${ca}`;
+  els.datasetHint.textContent = dataset.description || `Loaded ${path}`;
+  document.title = `${targetName()} Visibility Explorer`;
   els.provenance.innerHTML = provenanceHtml(eph.meta);
   render();
+}
+
+async function initData() {
+  await loadDatasetManifest();
+  const selectedId = new URLSearchParams(location.search).get('dataset');
+  const initial = Math.max(0, datasets.findIndex(d => d.id === selectedId || d.path === selectedId));
+  els.datasetSelect.value = String(initial);
+  await loadDataset(initial);
 }
 function normalizeLon(lon) {
   return ((lon + 540) % 360) - 180;
@@ -684,7 +777,7 @@ function scanBestLocations() {
 
     if (!best) {
       bestCache = [];
-      els.bestResults.innerHTML = 'No global candidates met the current minimum altitude, darkness, and spacecraft-illumination thresholds. Try lowering the minimum altitude or using a less strict dark limit.';
+      els.bestResults.innerHTML = 'No global candidates met the current minimum altitude, darkness, and target-illumination thresholds. Try lowering the minimum altitude or using a less strict dark limit.';
       return;
     }
 
@@ -704,7 +797,7 @@ function scanBestLocations() {
       : `fainter than current limiting mag ${obsBase.magLimit.toFixed(1)}`;
     const stepText = sampleSec < 60 ? `${sampleSec.toFixed(0)} s` : `${(sampleSec/60).toFixed(1)} min`;
     els.bestResults.innerHTML = `
-      <div class="muted small">Single global optimum from a 5° / 5-minute coarse scan, then local refinement to about 0.05° and the native ${stepText} ephemeris cadence. Constraints: altitude ≥ ${obsBase.minAlt.toFixed(0)}°, Sun altitude ≤ ${obsBase.darkLimit.toFixed(1)}°, spacecraft sunlit.</div>
+      <div class="muted small">Single global optimum from a 5° / 5-minute coarse scan, then local refinement to about 0.05° and the native ${stepText} ephemeris cadence. Constraints: altitude ≥ ${obsBase.minAlt.toFixed(0)}°, Sun altitude ≤ ${obsBase.darkLimit.toFixed(1)}°, target sunlit.</div>
       <div class="best-row">
         <div class="best-rank">★</div>
         <div><strong>${date} UTC</strong><br>lat ${best.lat.toFixed(2)}°, lon ${lonText} · alt ${best.alt.toFixed(1)}°, az ${best.az.toFixed(0)}° · Sun ${best.sunAlt.toFixed(1)}° · ${best.lit}<br><span class="muted small">${limitNote}</span></div>
@@ -721,6 +814,12 @@ function yawPitchForDirection(dir) {
 
 function wireEvents() {
   document.querySelectorAll('[data-place]').forEach(b => b.addEventListener('click', () => setPlace(PLACES[b.dataset.place])));
+  els.datasetSelect.addEventListener('change', () => loadDataset(parseInt(els.datasetSelect.value, 10)).catch(err => {
+    console.error(err);
+    els.dataStatus.textContent = 'Could not load ephemeris';
+    els.dataStatus.className = 'status-pill warn';
+    els.provenance.innerHTML = `<div class="warning-box">${safeHtml(err.message)}</div>`;
+  }));
   ['input','change'].forEach(evt => {
     [els.lat, els.lon, els.height, els.darkLimit, els.area, els.albedo, els.magLimit, els.minAlt].forEach(el => el.addEventListener(evt, render));
   });
@@ -750,6 +849,11 @@ function wireEvents() {
   });
   els.geo.addEventListener('pointerup', () => { dragging = false; lastDrag = null; });
   window.addEventListener('resize', render);
+  if ('ResizeObserver' in window) {
+    const ro = new ResizeObserver(() => render());
+    ro.observe(els.sky);
+    ro.observe(els.geo);
+  }
 }
 function startPlay() {
   const rate = parseInt(els.speed.value, 10);
@@ -759,7 +863,7 @@ function startPlay() {
 function stopPlay() { clearInterval(playTimer); playTimer = null; els.playPause.textContent = 'Play'; }
 
 wireEvents();
-loadData().catch(err => {
+initData().catch(err => {
   console.error(err);
   els.dataStatus.textContent = 'Could not load ephemeris';
   els.dataStatus.className = 'status-pill warn';

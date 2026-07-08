@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI refined best-spot visibility scan for data/clipper_ega.json.
+"""CLI refined best-spot visibility scan for an Earth-flyby dataset.
 
 The browser app runs the same idea interactively: first scan a coarse global
 lat/lon/time grid, then refine around the best rough-magnitude candidate.
@@ -128,7 +128,7 @@ def main():
     args=ap.parse_args()
     data=json.loads(Path(args.data).read_text())
     dates=[parse_time(t) for t in data['times']]
-    sc=data['clipper_eci_km']; sun=data['sun_eci_km']
+    sc=data.get('object_eci_km') or data.get('target_eci_km') or data['clipper_eci_km']; sun=data['sun_eci_km']
     sample_sec=(dates[1]-dates[0]).total_seconds() if len(dates)>1 else 60
     coarse_stride=max(1, round(5*60/sample_sec))
     best=scan_window(None, dates, sc, sun, args,
@@ -138,14 +138,14 @@ def main():
     best=refine(best, dates, sc, sun, args, sample_sec, coarse_stride)
     print('source:', data.get('metadata',{}).get('source'))
     if best is None:
-        print('No candidate met the altitude, darkness, and spacecraft-illumination constraints.')
+        print('No candidate met the altitude, darkness, and target-illumination constraints.')
         return
     visibility='brighter than' if best['visible'] else 'fainter than'
     print(f"Best refined candidate ({visibility} limiting mag {args.mag_limit:.1f}):")
     print(f"  time: {best['t'].isoformat().replace('+00:00','Z')}")
     print(f"  lat/lon: {best['lat']:.2f}, {best['lon']:.2f}°E")
     print(f"  alt/az: {best['alt']:.1f}°, {best['az']:.1f}°")
-    print(f"  Sun alt: {best['sun_alt']:.1f}°; spacecraft: {best['state']}")
+    print(f"  Sun alt: {best['sun_alt']:.1f}°; target: {best['state']}")
     print(f"  rough mag: {best['mag']:.2f}; range: {best['rg']:,.0f} km")
 
 if __name__=='__main__': main()

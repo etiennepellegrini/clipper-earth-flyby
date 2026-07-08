@@ -109,7 +109,7 @@ def main():
         sun.append([round(x, 3) for x in sun_eci_approx(t)])
 
     meta = {
-        'schema': 'europa-clipper-earth-flyby-v1',
+        'schema': 'earth-flyby-visibility-v2-demo',
         'generatedUtc': datetime.now(timezone.utc).isoformat().replace('+00:00','Z'),
         'source': 'DEMO_SYNTHETIC_APPROXIMATION_NOT_HORIZONS',
         'sourceWarning': 'This bundled file is only a UI/demo ephemeris because the build sandbox could not reach Horizons. Run scripts/fetch_horizons.py to overwrite it with actual JPL Horizons vectors.',
@@ -119,14 +119,15 @@ def main():
         'timeScale': 'UTC ISO strings; Horizons fetcher uses requested UTC epochs with VEC_CORR=NONE.',
         'closestApproachApproxUtc': ca.isoformat().replace('+00:00','Z'),
         'closestApproachAltitudeKmUsedInDemo': 3200,
+        'uiDefaults': {'areaM2': 140, 'albedo': 0.22, 'magLimit': 6.5, 'minAltDeg': 10, 'darkLimitDeg': -6},
         'notes': [
             'Replace this file with real Horizons data before drawing conclusions about where Europa Clipper will actually be visible.',
-            'The app computes topocentric alt/az, ground darkness, spacecraft Earth-shadow eclipse state, and an adjustable rough optical magnitude in the browser.'
+            'The app computes topocentric alt/az, ground darkness, target Earth-shadow eclipse state, and an adjustable rough optical magnitude in the browser.'
         ]
     }
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps({'metadata': meta, 'times': times, 'clipper_eci_km': sc, 'sun_eci_km': sun}, separators=(',', ':')))
+    out.write_text(json.dumps({'metadata': meta, 'times': times, 'object_eci_km': sc, 'target_eci_km': sc, 'clipper_eci_km': sc, 'sun_eci_km': sun}, separators=(',', ':')))
     print(f'wrote {out} with {len(times)} samples')
 
 if __name__ == '__main__':

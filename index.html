@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>Europa Clipper Earth Flyby Visibility</title>
+  <title>Earth Flyby Visibility Explorer</title>
   <meta name="theme-color" content="#0b1020" />
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="stylesheet" href="./styles.css" />
@@ -11,15 +11,21 @@
 <body>
   <header class="hero">
     <div>
-      <p class="eyebrow">Europa Clipper · Earth Gravity Assist · Dec 2026</p>
+      <p class="eyebrow" id="missionEyebrow">Earth flyby visibility explorer</p>
       <h1>Can anyone see the flyby?</h1>
-      <p class="subhead">Topocentric sky path, darkness, Earth shadow, rough brightness, and a synced near-Earth 3D geometry view. Ephemerides are loaded from a pre-saved JSON file.</p>
+      <p class="subhead">Topocentric sky path, darkness, Earth shadow, rough brightness, and a synced near-Earth 3D geometry view. Ephemerides are loaded from pre-saved JSON datasets.</p>
     </div>
     <div class="status-pill" id="dataStatus">Loading ephemeris…</div>
   </header>
 
   <main class="layout">
-    <section class="panel controls" aria-label="Observer and time controls">
+    <section class="panel controls" aria-label="Dataset, observer, and time controls">
+      <div class="section-title">Dataset</div>
+      <label>Target / encounter<br>
+        <select id="datasetSelect" aria-label="Dataset selector"></select>
+      </label>
+      <p class="muted small" id="datasetHint">Datasets are static JSON files listed in <code>data/datasets.json</code>.</p>
+
       <div class="section-title">Observer</div>
       <div class="grid two">
         <label>Latitude<br><input id="lat" type="number" step="0.0001" value="34.0195"></label>
@@ -34,7 +40,7 @@
           </select>
         </label>
       </div>
-      <div class="button-row">
+      <div class="button-row preset-row">
         <button data-place="santaMonica">Santa Monica</button>
         <button data-place="strasbourg">Strasbourg</button>
         <button id="useGps">Use device GPS</button>
@@ -43,7 +49,7 @@
       <div class="section-title">Time</div>
       <div class="time-readout" id="timeReadout">—</div>
       <input id="timeSlider" type="range" min="0" max="0" value="0" step="1" />
-      <div class="button-row">
+      <div class="button-row transport-row">
         <button id="stepBack">− step</button>
         <button id="playPause">Play</button>
         <button id="stepForward">+ step</button>
@@ -56,16 +62,16 @@
 
       <div class="section-title">Brightness model</div>
       <div class="grid two">
-        <label>Effective reflective area (m²)<br><input id="area" type="number" min="1" max="2000" step="1" value="140"></label>
+        <label>Effective reflective area (m²)<br><input id="area" type="number" min="1" max="200000" step="1" value="140"></label>
         <label>Diffuse reflectance<br><input id="albedo" type="number" min="0.01" max="1" step="0.01" value="0.22"></label>
         <label>Limiting mag<br><input id="magLimit" type="number" min="0" max="20" step="0.1" value="6.5"></label>
         <label>Min altitude<br><input id="minAlt" type="number" min="0" max="80" step="1" value="10"></label>
       </div>
-      <p class="muted small">Magnitude is a deliberately rough diffuse-area proxy. It does not model attitude, BRDF, or solar-array glints, so it is a guide for “worth trying,” not a prediction.</p>
+      <p class="muted small">Magnitude is a deliberately rough diffuse-area proxy. It does not model attitude, BRDF, solar-array glints, asteroid phase laws, or sky brightness, so it is a guide for “worth trying,” not a prediction.</p>
     </section>
 
     <section class="panel visual-panel" aria-label="Sky view">
-      <div class="panel-header">
+      <div class="panel-header visual-header">
         <div>
           <div class="section-title">Sky from observer</div>
           <p class="muted">Polar chart: center = zenith, rim = horizon, north at top, east at right. Above-horizon path is drawn inside the disk; current below-horizon bearing is parked just outside the rim.</p>
@@ -73,30 +79,34 @@
         <div class="legend">
           <span><i class="swatch visible"></i>visible-ish</span>
           <span><i class="swatch twilight"></i>too bright</span>
-          <span><i class="swatch shadow"></i>spacecraft shadow</span>
+          <span><i class="swatch shadow"></i>target shadow</span>
           <span><i class="swatch below"></i>below horizon</span>
         </div>
       </div>
-      <canvas id="skyCanvas" width="1000" height="760"></canvas>
+      <canvas id="skyCanvas" aria-label="Topocentric sky polar chart"></canvas>
     </section>
 
     <aside class="panel readout-panel" aria-label="Current readout and geometry">
-      <div class="section-title">Current status</div>
-      <div id="visibilityBadge" class="visibility-badge">—</div>
-      <dl class="readout" id="readout"></dl>
-
-      <div class="section-title geometry-title">Synced geometry</div>
-      <div class="mini-toolbar" aria-label="Geometry view controls">
-        <button id="geoPresetEyes" title="Oblique near-Earth view">Eyes-ish</button>
-        <button id="geoPresetSun" title="Look roughly along the Sun direction">Sun line</button>
-        <button id="geoPresetNorth" title="Look down the north pole / equator frame">North</button>
-        <select id="geoScale" title="3D distance scale">
-          <option value="near" selected>Near pass scale</option>
-          <option value="compressed">Compressed full path</option>
-        </select>
+      <div class="readout-block">
+        <div class="section-title">Current status</div>
+        <div id="visibilityBadge" class="visibility-badge">—</div>
+        <dl class="readout" id="readout"></dl>
       </div>
-      <canvas id="geoCanvas" width="700" height="520"></canvas>
-      <p class="muted small">Near-pass scale makes Earth and the close approach leg legible like NASA Eyes; distant parts of the ±window may leave the box. The Sun is drawn on the edge in its true projected direction, Earth day/night is shaded from the actual Sun vector, and the purple wedge is Earth's shadow. Drag to rotate.</p>
+
+      <div class="geometry-block">
+        <div class="section-title geometry-title">Synced geometry</div>
+        <div class="mini-toolbar" aria-label="Geometry view controls">
+          <button id="geoPresetEyes" title="Oblique near-Earth view">Eyes-ish</button>
+          <button id="geoPresetSun" title="Look roughly along the Sun direction">Sun line</button>
+          <button id="geoPresetNorth" title="Look down the north pole / equator frame">North</button>
+          <select id="geoScale" title="3D distance scale">
+            <option value="near" selected>Near pass scale</option>
+            <option value="compressed">Compressed full path</option>
+          </select>
+        </div>
+        <canvas id="geoCanvas" aria-label="Earth-centered 3D geometry view"></canvas>
+        <p class="muted small">Near-pass scale makes Earth and the close approach leg legible like NASA Eyes; distant parts of the ±window may leave the box. The Sun is drawn on the edge in its true projected direction, Earth day/night is shaded from the actual Sun vector, and the purple wedge is Earth's shadow. Drag to rotate.</p>
+      </div>
     </aside>
 
     <section class="panel best-panel" aria-label="Best location scan">
@@ -105,12 +115,12 @@
           <div class="section-title">Best-spot scan</div>
           <p class="muted">Global search for the single brightest rough-magnitude observing geometry. It first scans a coarse grid, then refines locally around the optimum. No terrain/clouds/airspace.</p>
         </div>
-        <div class="button-row">
+        <div class="button-row scan-row">
           <button id="scanBest">Scan Earth</button>
           <button id="applyBest">Apply best result</button>
         </div>
       </div>
-      <div id="bestResults" class="best-results">Run the scan after loading real Horizons data.</div>
+      <div id="bestResults" class="best-results">Run the scan after loading a Horizons dataset.</div>
     </section>
 
     <section class="panel notes-panel">

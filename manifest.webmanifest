@@ -1,16 +1,11 @@
 {
-  "name": "Europa Clipper Earth Flyby Visibility",
-  "short_name": "Clipper Flyby",
-  "start_url": "./index.html",
+  "name": "Earth Flyby Visibility Explorer",
+  "short_name": "Flyby Viz",
+  "start_url": "./",
   "display": "standalone",
   "background_color": "#07111f",
   "theme_color": "#0b1020",
   "icons": [
-    {
-      "src": "./icon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
-      "purpose": "any maskable"
-    }
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
   ]
 }

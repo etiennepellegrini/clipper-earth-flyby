@@ -1,0 +1,10 @@
+{
+  "datasets": [
+    {
+      "id": "clipper-ega-2026",
+      "label": "Europa Clipper · Earth gravity assist · Dec 2026",
+      "path": "data/clipper_ega.json",
+      "description": "Europa Clipper target -159, Earth-centered Horizons vectors around the Dec 2026 Earth gravity assist. Replace the bundled demo JSON with real Horizons output before using the result."
+    }
+  ]
+}
