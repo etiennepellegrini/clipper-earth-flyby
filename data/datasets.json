@@ -23,6 +23,12 @@
       "label": "JUICE \u00b7 Sep 2026",
       "path": "data/juice-2026-earth-flyby.json",
       "description": "Horizons target -28, closest sampled altitude 8638 km at 2026-09-28T11:44:52Z."
+    },
+    {
+      "id": "osiris-apex-2029-earth-flyby",
+      "label": "OSIRIS-APEX \u00b7 Apophis encounter \u00b7 Apr 2029",
+      "path": "data/osiris-apex-2029-earth-flyby.json",
+      "description": "Horizons target -64, closest sampled altitude 1145 km at 2029-04-13T23:05:28Z."
     }
   ]
 }
