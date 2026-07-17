@@ -10,6 +10,11 @@ const COARSE_TIME_STEP = 5;
 // One-line switch for the optional 3D ecliptic reference ring.
 const SHOW_ECLIPTIC_REFERENCE = false;
 const ECLIPTIC_REFERENCE_RADIUS_ER = 1.58;
+
+// Display range is intentionally compressed even in the close view. A value of
+// 1 would be physically distance-to-scale; smaller values pull the target toward
+// the selected station while preserving its exact topocentric direction.
+const CLOSE_VIEW_TOPOCENTRIC_RANGE_SCALE = 0.62;
 const PLACES = {
   santaMonica: { lat: 34.0195, lon: -118.4912, height: 30, label: 'Santa Monica, CA' },
   strasbourg: { lat: 48.5734, lon: 7.7521, height: 142, label: 'Strasbourg, France' },
@@ -36,7 +41,7 @@ let bestCache = [];
 let geoRot = { yaw: -0.9, pitch: 0.45 };
 let geoViewPreset = 'perspective';
 let dragging = false, lastDrag = null;
-let geoRangeZoom = 0; // 0 = close true-scale view; 1 = wide hybrid overview.
+let geoRangeZoom = 0; // 0 = close readable view; 1 = wide topocentric overview.
 const geoPointers = new Map();
 let geoPinch = null;
 
@@ -300,39 +305,49 @@ function smoothstep(edge0, edge1, x) {
   const t = clamp((x - edge0) / Math.max(1e-12, edge1 - edge0), 0, 1);
   return t * t * (3 - 2 * t);
 }
-function geometryZoomState(w, h) {
-  // First behave like a normal camera zoom: Earth and the trajectory both shrink.
-  // Once Earth reaches a still-readable size, progressively contract the *whole
-  // trajectory affinely about the closest-approach point*. Unlike radial/log
-  // compression, an affine contraction preserves the path's shape and does not
-  // make a straight approach curl around Earth.
+function geometryZoomState(w, h, obs) {
+  // Stage 1 feels like an ordinary camera zoom: Earth and every scene element
+  // shrink together. Earth stops shrinking while it is still large enough to read
+  // the station, equator, and day/night geometry.
   const minDim = Math.min(w, h);
   const baseEarthR = clamp(minDim * 0.145, 44, 78);
-  const earthShrink = 1 - 0.50 * smoothstep(0, 0.76, geoRangeZoom);
+  const earthShrink = 1 - 0.48 * smoothstep(0, 0.70, geoRangeZoom);
   const earthR = baseEarthR * earthShrink;
 
-  const caIdx = findClosestSample();
-  const caER = mul(eph.sc[caIdx], 1 / RE_KM);
-  let maxDeltaER = 1;
-  for (const v of eph.sc) {
-    maxDeltaER = Math.max(maxDeltaER, norm(sub(mul(v, 1 / RE_KM), caER)));
+  // Stage 2 uniformly scales each sample's station-to-target vector. This preserves
+  // the target's exact altitude/azimuth from the selected station at every epoch:
+  // displayedTarget - station is always parallel to realTarget - station.
+  // It sacrifices only range, not line of sight.
+  let maxTopocentricRangeER = 1;
+  const stride = Math.max(1, Math.floor(eph.sc.length / 4000));
+  for (let i = 0; i < eph.sc.length; i += stride) {
+    const station = observerEci(obs.lat, obs.lon, obs.height, eph.dates[i]);
+    maxTopocentricRangeER = Math.max(
+      maxTopocentricRangeER,
+      norm(sub(eph.sc[i], station)) / RE_KM,
+    );
   }
 
-  // At maximum overview, aim to fit most/all of the pass inside the canvas while
-  // keeping Earth at roughly half its close-view diameter. The contraction is a
-  // single scalar applied about CA, so trajectory shape is preserved exactly.
+  // Use a conservative bound: the station is about one Earth radius from center,
+  // so 1 + scaled topocentric range fits inside availableRadiusER.
   const availableRadiusPx = minDim * 0.43;
   const availableRadiusER = availableRadiusPx / earthR;
-  const caOffsetER = norm(caER);
-  const fitScale = clamp((availableRadiusER - caOffsetER) / maxDeltaER, 0.025, 1);
-  const overviewBlend = smoothstep(0.58, 1, geoRangeZoom);
-  const trajectoryScale = 1 - (1 - fitScale) * overviewBlend;
+  const fitScale = clamp(
+    (availableRadiusER - 1.08) / maxTopocentricRangeER,
+    0.018,
+    CLOSE_VIEW_TOPOCENTRIC_RANGE_SCALE,
+  );
+  const overviewBlend = smoothstep(0.54, 1, geoRangeZoom);
+  const topocentricRangeScale =
+    CLOSE_VIEW_TOPOCENTRIC_RANGE_SCALE +
+    (fitScale - CLOSE_VIEW_TOPOCENTRIC_RANGE_SCALE) * overviewBlend;
 
-  return { earthR, caER, trajectoryScale };
+  return { earthR, topocentricRangeScale };
 }
-function targetSceneVec(v, caER, trajectoryScale) {
-  const vER = mul(v, 1 / RE_KM);
-  return add(caER, mul(sub(vER, caER), trajectoryScale));
+function targetSceneVec(v, date, obs, topocentricRangeScale) {
+  const stationER = mul(observerEci(obs.lat, obs.lon, obs.height, date), 1 / RE_KM);
+  const targetER = mul(v, 1 / RE_KM);
+  return add(stationER, mul(sub(targetER, stationER), topocentricRangeScale));
 }
 function earthSceneVec(v) {
   return mul(v, 1 / RE_KM);
@@ -348,7 +363,7 @@ function drawGeometry() {
   if (geoViewPreset === 'sun') geoRot = yawPitchForDirection(unit(now.sun));
   else if (geoViewPreset === 'north') geoRot = { yaw: 0, pitch: Math.PI / 2 };
 
-  const { earthR, caER, trajectoryScale } = geometryZoomState(w, h);
+  const { earthR, topocentricRangeScale } = geometryZoomState(w, h, obs);
   const scale = earthR;
   const cx = w * 0.55;
   const cy = h * 0.53;
@@ -384,7 +399,7 @@ function drawGeometry() {
       scene,
     };
   }
-  function mapTarget(v) { return projectScene(targetSceneVec(v, caER, trajectoryScale)); }
+  function mapTarget(v, date) { return projectScene(targetSceneVec(v, date, obs, topocentricRangeScale)); }
   function mapEarth(v) { return projectScene(earthSceneVec(v)); }
 
   if (sunProjection.visible) drawProjectedSun(ctx, cx, cy, earthR, w, h, sunProjection);
@@ -414,7 +429,7 @@ function drawGeometry() {
   let last = null;
   const stride = Math.max(1, Math.floor(eph.times.length / 900));
   for (let i=0; i<eph.times.length; i+=stride) {
-    const p = mapTarget(eph.sc[i]);
+    const p = mapTarget(eph.sc[i], eph.dates[i]);
     if (!p.inFrontOfCamera) { last = null; continue; }
     const current = { ...p, cls: pathClass(sampleAt(i, obs)) };
     if (last) {
@@ -441,7 +456,7 @@ function drawGeometry() {
     ctx.restore();
   }
 
-  const sp = mapTarget(now.sc);
+  const sp = mapTarget(now.sc, now.date);
   const targetBehind = sp.inFrontOfCamera && sp.z < 0;
   const targetOverEarth = sp.inFrontOfCamera && Math.hypot(sp.x - cx, sp.y - cy) < earthR * 1.02;
 
