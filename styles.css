@@ -135,7 +135,7 @@ canvas {
   background: radial-gradient(circle at 30% 15%, rgba(129,212,255,.08), transparent 14rem), rgba(1, 6, 14, .74);
   touch-action: none;
 }
-.visibility-badge { padding: .8rem .9rem; border-radius: 1rem; font-weight: 900; background: rgba(102, 117, 139, .16); border: 1px solid rgba(102, 117, 139, .35); margin-bottom: .75rem; }
+.visibility-badge { padding: .8rem .9rem; border-radius: 1rem; font-size: .9rem; font-weight: 900; background: rgba(102, 117, 139, .16); border: 1px solid rgba(102, 117, 139, .35); margin-bottom: .75rem; }
 .visibility-badge.good { background: rgba(116, 240, 168, .14); border-color: rgba(116, 240, 168, .42); color: #d7ffe7; }
 .visibility-badge.warn { background: rgba(255, 211, 110, .14); border-color: rgba(255, 211, 110, .42); color: #fff1c6; }
 .visibility-badge.bad { background: rgba(255, 122, 138, .12); border-color: rgba(255, 122, 138, .35); color: #ffd8dd; }

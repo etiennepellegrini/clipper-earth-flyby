@@ -29,8 +29,8 @@
 
       <div class="section-title">Observer</div>
       <div class="grid two">
-        <label>Latitude<br><input id="lat" type="number" step="0.0001" value="34.0195"></label>
-        <label>Longitude East<br><input id="lon" type="number" step="0.0001" value="-118.4912"></label>
+        <label>Latitude<br><input id="lat" type="number" step="0.0001" value="34.199505"></label>
+        <label>Longitude East<br><input id="lon" type="number" step="0.0001" value="-118.172839"></label>
         <label>Height (m)<br><input id="height" type="number" step="1" value="30"></label>
         <label>Dark limit<br>
           <select id="darkLimit">
@@ -42,8 +42,9 @@
         </label>
       </div>
       <div class="button-row preset-row">
-        <button data-place="santaMonica">Santa Monica</button>
+        <button data-place="jpl">JPL</button>
         <button data-place="strasbourg">Strasbourg</button>
+        <button data-place="santaMonica">Santa Monica</button>
         <button id="useGps">Use device GPS</button>
       </div>
 
@@ -57,8 +58,8 @@
         <button id="jumpClosest">Closest sample</button>
       </div>
       <label class="wide">Playback speed<br>
-        <input id="speed" type="range" min="1" max="120" value="20" step="1" />
-        <span id="speedLabel">20 samples/s</span>
+        <input id="speed" type="range" min="1" max="600" value="60" step="1" />
+        <span id="speedLabel">60 samples/s</span>
       </label>
 
       <div class="section-title">Brightness model</div>

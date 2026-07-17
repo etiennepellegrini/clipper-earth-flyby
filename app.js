@@ -66,6 +66,7 @@ const CAMERA_DISTANCE_ER = 1_000_000;
 // is pulled toward the rotating station at that sample's own epoch.
 const TOPOCENTRIC_PATH_ANCHOR_MODE = 'sample-station';
 const PLACES = {
+  jpl: { lat: 34.199505, lon: -118.172839, height: 30, label: 'JPL' },
   santaMonica: { lat: 34.0195, lon: -118.4912, height: 30, label: 'Santa Monica, CA' },
   strasbourg: { lat: 48.5734, lon: 7.7521, height: 142, label: 'Strasbourg, France' },
 };
@@ -843,8 +844,8 @@ function updateReadout() {
   const reasons = [];
   if (s.topo.alt < getObserver().minAlt) reasons.push('below horizon');
   if (!s.dark) reasons.push('sky too bright');
-  if (!s.ecl.sunlit) reasons.push('in Earth shadow');
-  if (!s.brightEnough) reasons.push('too faint');
+  if (!s.ecl.sunlit) reasons.push('in shadow');
+  else if (!s.brightEnough) reasons.push('too faint');
   let text, cls;
   if (s.visible) { text = 'Potentially visible'; cls = 'good'; }
   else if (s.topo.alt > 0 && s.dark && s.ecl.sunlit) { text = 'Geometrically visible, probably faint'; cls = 'warn'; }
