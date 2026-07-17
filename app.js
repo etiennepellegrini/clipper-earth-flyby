@@ -3,9 +3,6 @@
 const RE_KM = 6378.137;
 const RSUN_KM = 695700;
 const AU_KM = 149597870.7;
-const COARSE_LAT_STEP = 2;
-const COARSE_LON_STEP = 2;
-const COARSE_TIME_STEP = 5;
 const PLACES = {
   santaMonica: { lat: 34.0195, lon: -118.4912, height: 30, label: 'Santa Monica, CA' },
   strasbourg: { lat: 48.5734, lon: 7.7521, height: 142, label: 'Strasbourg, France' },
@@ -20,7 +17,7 @@ const els = {
   speed: document.getElementById('speed'), speedLabel: document.getElementById('speedLabel'),
   area: document.getElementById('area'), albedo: document.getElementById('albedo'), magLimit: document.getElementById('magLimit'), minAlt: document.getElementById('minAlt'),
   sky: document.getElementById('skyCanvas'), geo: document.getElementById('geoCanvas'), readout: document.getElementById('readout'), visibilityBadge: document.getElementById('visibilityBadge'),
-  geoScale: document.getElementById('geoScale'), geoPresetEyes: document.getElementById('geoPresetEyes'), geoPresetSun: document.getElementById('geoPresetSun'), geoPresetNorth: document.getElementById('geoPresetNorth'),
+  geoPresetEyes: document.getElementById('geoPresetEyes'), geoPresetSun: document.getElementById('geoPresetSun'), geoPresetNorth: document.getElementById('geoPresetNorth'),
   provenance: document.getElementById('provenance'), scanBest: document.getElementById('scanBest'), applyBest: document.getElementById('applyBest'), bestResults: document.getElementById('bestResults'), useGps: document.getElementById('useGps'),
 };
 
@@ -32,6 +29,9 @@ let bestCache = [];
 let geoRot = { yaw: -0.9, pitch: 0.45 };
 let geoViewPreset = 'perspective';
 let dragging = false, lastDrag = null;
+let geoRangeZoom = 0; // 0 = true near-Earth scale; 1 = strongly compressed full-pass scale.
+const geoPointers = new Map();
+let geoPinch = null;
 
 const fmt = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'medium', timeZone: 'UTC' });
 
@@ -289,11 +289,27 @@ function project3(v) {
   const basis = cameraBasis();
   return [dot(v, basis.right), dot(v, basis.up), dot(v, basis.forward)];
 }
-function compressVec(v, maxR) {
+function rangeCompressionStrength() {
+  // Keep the near-Earth neighborhood nearly metric while smoothly compressing
+  // distant trajectory legs.  The exponential range gives useful control at both
+  // ends: small wheel changes near zero remain gentle; the far end can fit an
+  // entire multi-hour/day pass without shrinking Earth.
+  if (geoRangeZoom <= 1e-4) return 0;
+  return 0.02 * Math.pow(250, geoRangeZoom);
+}
+function mappedRangeER(rER) {
+  // Preserve the actual close-pass geometry through 2.5 Earth radii. Range zoom
+  // only bends the distant legs inward, so Earth and the encounter neighborhood
+  // do not appear to breathe as the user scrolls.
+  const pivotER = 2.5;
+  if (rER <= pivotER || geoRangeZoom <= 1e-4) return rER;
+  const k = rangeCompressionStrength();
+  return pivotER + Math.asinh(k * (rER - pivotER)) / k;
+}
+function rangeMapVec(v) {
   const r = norm(v);
   if (r === 0) return [0,0,0];
-  const m = Math.log1p(r / RE_KM) / Math.log1p(maxR / RE_KM);
-  return mul(unit(v), m);
+  return mul(unit(v), mappedRangeER(r / RE_KM));
 }
 function drawGeometry() {
   const { ctx, w, h } = prepareCanvas(els.geo);
@@ -306,15 +322,14 @@ function drawGeometry() {
   if (geoViewPreset === 'sun') geoRot = yawPitchForDirection(unit(now.sun));
   else if (geoViewPreset === 'north') geoRot = { yaw: 0, pitch: Math.PI / 2 };
 
-  const mode = els.geoScale?.value || 'near';
-  const maxR = Math.max(...eph.rangeSamples);
-  const nearViewER = 5.0;
-  const scale = Math.min(w,h) * (mode === 'near' ? 0.52 : 0.40);
-  const cx = mode === 'near' ? w * 0.58 : w / 2;
+  const maxRER = Math.max(...eph.rangeSamples) / RE_KM;
+  const minDim = Math.min(w, h);
+  const earthR = clamp(minDim * 0.115, 34, 68);
+  const scale = earthR; // Scene units are Earth radii; Earth stays fixed while range zoom changes.
+  const cx = w * 0.55;
   const cy = h * 0.53;
-  const earthSceneR = mode === 'near' ? 1 / nearViewER : 46 / scale;
-  const earthR = earthSceneR * scale;
-  const cameraDistance = mode === 'near' ? 3.25 : 3.8;
+  const earthSceneR = 1;
+  const cameraDistance = 16.25;
   const sunDir = unit(now.sun);
   const sunView = unit(project3(sunDir));
   const sunProjection = projectedScreenDirection(sunView);
@@ -328,8 +343,7 @@ function drawGeometry() {
   }
   ctx.restore();
 
-  function mapRaw(v) {
-    const scene = mode === 'near' ? mul(v, 1 / (RE_KM * nearViewER)) : compressVec(v, maxR);
+  function projectScene(scene) {
     const view = project3(scene);
     const denominator = cameraDistance - view[2];
     const inFrontOfCamera = denominator > 0.08;
@@ -344,6 +358,7 @@ function drawGeometry() {
       scene,
     };
   }
+  function mapRaw(v) { return projectScene(rangeMapVec(v)); }
 
   if (sunProjection.visible) drawProjectedSun(ctx, cx, cy, earthR, w, h, sunProjection);
 
@@ -354,9 +369,16 @@ function drawGeometry() {
     drawEarthShadow(ctx, cx, cy, shEdge.x, shEdge.y, earthR, sunProjection.opacity);
   }
 
-  // Build the path once, then use painter-style depth ordering. The old view drew
-  // the entire path before Earth, which incorrectly hid foreground trajectory arcs
-  // and was a major source of the "2-D layers" feeling.
+  // A real perspective ecliptic sheet, split by camera depth.  It is an annulus,
+  // not a floating 2-D ellipse, and is clipped away from Earth's solid disk.
+  const eps = rad(23.439291111);
+  const eclipticX = [1, 0, 0];
+  const eclipticY = [0, Math.cos(eps), Math.sin(eps)];
+  const planeOuterR = clamp(mappedRangeER(Math.min(maxRER, 12)), 2.8, 5.2);
+  const eclipticTiles = buildPlaneTiles(projectScene, eclipticX, eclipticY, 1.12, planeOuterR);
+  drawPlaneTiles(ctx, eclipticTiles.back, cx, cy, earthR, w, h, false);
+
+  // Build the path once, then use painter-style depth ordering.
   const backSegments = [];
   const frontSegments = [];
   let last = null;
@@ -414,12 +436,11 @@ function drawGeometry() {
   // Real Sun/Earth geometry for the lit and dark side of Earth.
   drawShadedEarth(ctx, cx, cy, earthR, sunView);
 
-  // Equator drawn on the visible surface of the globe, with perspective projection.
+  // Equator painted directly on the visible surface of Earth.
   drawSurfaceGreatCircle(ctx, cx, cy, earthSceneR, scale, cameraDistance,
     [1,0,0], [0,1,0], 'rgba(206,231,255,.58)', [3,5]);
 
-  // Keep a subtle subsolar dot, but no explanatory label—the Sun direction and
-  // day/night shading already make its meaning clear.
+  // Keep a subtle subsolar dot, but no explanatory label.
   if (sunView[2] > earthSceneR / cameraDistance) {
     const pointScene = mul(sunView, earthSceneR * 0.995);
     const denominator = cameraDistance - pointScene[2];
@@ -430,25 +451,95 @@ function drawGeometry() {
     ctx.strokeStyle = 'rgba(40,25,5,.55)'; ctx.lineWidth = 1; ctx.stroke();
   }
 
+  // Foreground half of the ecliptic sheet is drawn after Earth, but clipped out of
+  // the globe itself. Foreground trajectory remains on top of the reference plane.
+  drawPlaneTiles(ctx, eclipticTiles.front, cx, cy, earthR, w, h, true);
   drawSegments(frontSegments, false);
 
-  // Observer marker and local zenith are true surface geometry. Back-side markers
-  // are simply occluded rather than drawn translucently through the planet.
+  // Observer marker and local zenith. A far-side station remains visible as a dim,
+  // shaded x-ray marker, while its zenith line is suppressed.
   const obsVec = observerEci(obs.lat, obs.lon, obs.height, now.date);
   const obsView = project3(unit(obsVec));
   const obsFront = obsView[2] > earthSceneR / cameraDistance;
-  if (obsFront) {
-    const op = mapRaw(obsVec);
-    const zen = mapRaw(mul(unit(obsVec), RE_KM * 1.85));
-    if (op.inFrontOfCamera && zen.inFrontOfCamera) {
-      ctx.beginPath(); ctx.moveTo(op.x, op.y); ctx.lineTo(zen.x, zen.y);
-      ctx.strokeStyle = 'rgba(255,255,255,.36)'; ctx.lineWidth = 1.2; ctx.stroke();
+  const op = mapRaw(obsVec);
+  if (op.inFrontOfCamera) {
+    if (obsFront) {
+      const zen = mapRaw(mul(unit(obsVec), RE_KM * 1.85));
+      if (zen.inFrontOfCamera) {
+        ctx.beginPath(); ctx.moveTo(op.x, op.y); ctx.lineTo(zen.x, zen.y);
+        ctx.strokeStyle = 'rgba(255,255,255,.36)'; ctx.lineWidth = 1.2; ctx.stroke();
+      }
       ctx.beginPath(); ctx.arc(op.x, op.y, 5.5, 0, Math.PI*2); ctx.fillStyle = '#ffffff'; ctx.fill();
-      ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.stroke();
+      ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.lineWidth = 1; ctx.stroke();
+    } else {
+      ctx.save();
+      ctx.beginPath(); ctx.arc(op.x, op.y, 5.2, 0, Math.PI*2);
+      ctx.fillStyle = 'rgba(174,190,211,.28)'; ctx.fill();
+      ctx.setLineDash([2.5,2.5]);
+      ctx.strokeStyle = 'rgba(225,238,255,.48)'; ctx.lineWidth = 1.2; ctx.stroke();
+      ctx.restore();
     }
   }
 
   if (!targetBehind) drawTargetMarker(sp, false);
+}
+
+
+function buildPlaneTiles(projectScene, basis1, basis2, innerR, outerR) {
+  const tiles = { back: [], front: [] };
+  const angularSteps = 48;
+  const radialSteps = 3;
+  for (let ir=0; ir<radialSteps; ir++) {
+    const r0 = innerR + (outerR - innerR) * ir / radialSteps;
+    const r1 = innerR + (outerR - innerR) * (ir + 1) / radialSteps;
+    for (let ia=0; ia<angularSteps; ia++) {
+      const a0 = 2 * Math.PI * ia / angularSteps;
+      const a1 = 2 * Math.PI * (ia + 1) / angularSteps;
+      const scenePoints = [
+        add(mul(basis1, r0*Math.cos(a0)), mul(basis2, r0*Math.sin(a0))),
+        add(mul(basis1, r1*Math.cos(a0)), mul(basis2, r1*Math.sin(a0))),
+        add(mul(basis1, r1*Math.cos(a1)), mul(basis2, r1*Math.sin(a1))),
+        add(mul(basis1, r0*Math.cos(a1)), mul(basis2, r0*Math.sin(a1))),
+      ];
+      const points = scenePoints.map(projectScene);
+      if (points.some(p => !p.inFrontOfCamera)) continue;
+      const z = points.reduce((sum, p) => sum + p.z, 0) / points.length;
+      (z < 0 ? tiles.back : tiles.front).push({ points, z, radial: ir, angular: ia });
+    }
+  }
+  tiles.back.sort((a,b) => a.z - b.z);
+  tiles.front.sort((a,b) => a.z - b.z);
+  return tiles;
+}
+
+function drawPlaneTiles(ctx, tiles, cx, cy, earthR, w, h, foreground) {
+  if (!tiles.length) return;
+  ctx.save();
+  // Keep the reference sheet outside the opaque globe. The even-odd clip makes the
+  // plane read as a 3-D annulus passing behind/in front of Earth rather than paint.
+  ctx.beginPath();
+  ctx.rect(0, 0, w, h);
+  ctx.moveTo(cx + earthR * 1.035, cy);
+  ctx.arc(cx, cy, earthR * 1.035, 0, Math.PI * 2);
+  try { ctx.clip('evenodd'); } catch (_) { ctx.clip(); }
+
+  for (const tile of tiles) {
+    const pts = tile.points;
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i=1; i<pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.closePath();
+    ctx.fillStyle = foreground ? 'rgba(255,211,110,.030)' : 'rgba(255,211,110,.016)';
+    ctx.fill();
+    // Sparse mesh lines imply a plane without recreating the old floating dotted ellipse.
+    if (tile.angular % 4 === 0 || tile.radial === 2) {
+      ctx.strokeStyle = foreground ? 'rgba(255,211,110,.18)' : 'rgba(255,211,110,.09)';
+      ctx.lineWidth = foreground ? 0.9 : 0.7;
+      ctx.setLineDash(tile.radial === 2 ? [5,6] : [2,7]);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
 }
 
 function projectedScreenDirection(viewDir) {
@@ -691,6 +782,7 @@ async function loadDataset(datasetIndex = 0) {
   els.dataStatus.className = 'status-pill';
   els.bestResults.textContent = 'Run the scan after loading a Horizons dataset.';
   bestCache = [];
+  geoRangeZoom = 0;
   const path = dataset.path.replace(/^\.\//, '');
   const res = await fetch(path, { cache: 'no-cache' });
   if (!res.ok) throw new Error(`Could not load ${path} (${res.status})`);
@@ -810,12 +902,12 @@ function scanBestLocations() {
   setTimeout(() => {
     const obsBase = getObserver();
     const sampleSec = Math.max(1, (eph.dates[1] - eph.dates[0]) / 1000 || 60);
-    const coarseStride = Math.max(1, Math.round((COARSE_TIME_STEP*60) / sampleSec));
+    const coarseStride = Math.max(1, Math.round((5*60) / sampleSec));
 
     let best = scanWindowForBest(null, obsBase, {
       i0: 0, i1: eph.times.length - 1, iStep: coarseStride,
-      lat0: -85, lat1: 85, latStep: COARSE_LAT_STEP,
-      lon0: -180, lon1: 175, lonStep: COARSE_LON_STEP,
+      lat0: -85, lat1: 85, latStep: 5,
+      lon0: -180, lon1: 175, lonStep: 5,
     });
 
     if (!best) {
@@ -884,7 +976,6 @@ function wireEvents() {
       els.lat.value = pos.coords.latitude.toFixed(6); els.lon.value = pos.coords.longitude.toFixed(6); els.height.value = Math.round(pos.coords.altitude || 0); render();
     }, err => alert(err.message));
   });
-  els.geoScale?.addEventListener('change', drawGeometry);
   if (els.geoPresetEyes) { els.geoPresetEyes.textContent = 'Perspective'; els.geoPresetEyes.title = 'Oblique perspective view'; }
   if (els.geoPresetSun) { els.geoPresetSun.textContent = 'From Sun'; els.geoPresetSun.title = 'Look from the Sun toward Earth'; }
   if (els.geoPresetNorth) { els.geoPresetNorth.textContent = 'North Pole'; els.geoPresetNorth.title = "Look down Earth's north-pole axis"; }
@@ -893,28 +984,79 @@ function wireEvents() {
   els.geoPresetNorth?.addEventListener('click', () => { geoViewPreset = 'north'; drawGeometry(); });
   els.geo.style.touchAction = 'none';
   els.geo.style.cursor = 'grab';
+
+  function pointerDistance() {
+    const pts = [...geoPointers.values()];
+    if (pts.length < 2) return 0;
+    return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+  }
+  function finishGeoPointer(e) {
+    geoPointers.delete(e.pointerId);
+    if (geoPointers.size >= 2) {
+      geoPinch = { distance: pointerDistance(), zoom: geoRangeZoom };
+      dragging = false;
+      lastDrag = null;
+    } else if (geoPointers.size === 1) {
+      const remaining = [...geoPointers.values()][0];
+      geoPinch = null;
+      dragging = true;
+      lastDrag = [remaining.x, remaining.y];
+    } else {
+      geoPinch = null;
+      dragging = false;
+      lastDrag = null;
+      els.geo.style.cursor = 'grab';
+    }
+  }
   els.geo.addEventListener('pointerdown', e => {
-    geoViewPreset = 'custom';
-    dragging = true;
-    lastDrag = [e.clientX, e.clientY];
-    els.geo.style.cursor = 'grabbing';
+    geoPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     els.geo.setPointerCapture(e.pointerId);
+    if (geoPointers.size >= 2) {
+      geoPinch = { distance: pointerDistance(), zoom: geoRangeZoom };
+      dragging = false;
+      lastDrag = null;
+      els.geo.style.cursor = 'grabbing';
+    } else {
+      geoViewPreset = 'custom';
+      dragging = true;
+      lastDrag = [e.clientX, e.clientY];
+      els.geo.style.cursor = 'grabbing';
+    }
   });
   els.geo.addEventListener('pointermove', e => {
+    if (!geoPointers.has(e.pointerId)) return;
+    geoPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (geoPointers.size >= 2 && geoPinch) {
+      const d = pointerDistance();
+      if (d > 0 && geoPinch.distance > 0) {
+        // Pinching inward reveals more of the pass; spreading returns toward true scale.
+        geoRangeZoom = clamp(geoPinch.zoom - Math.log(d / geoPinch.distance) * 0.72, 0, 1);
+        drawGeometry();
+      }
+      return;
+    }
     if (!dragging || !lastDrag) return;
     const dx = e.clientX - lastDrag[0], dy = e.clientY - lastDrag[1];
     lastDrag = [e.clientX, e.clientY];
+    geoViewPreset = 'custom';
     geoRot.yaw += dx * 0.007;
     geoRot.pitch = clamp(geoRot.pitch - dy * 0.007, -Math.PI/2 + 0.01, Math.PI/2 - 0.01);
     drawGeometry();
   });
-  const endGeoDrag = () => { dragging = false; lastDrag = null; els.geo.style.cursor = 'grab'; };
-  els.geo.addEventListener('pointerup', endGeoDrag);
-  els.geo.addEventListener('pointercancel', endGeoDrag);
-  els.geo.addEventListener('lostpointercapture', endGeoDrag);
+  els.geo.addEventListener('pointerup', finishGeoPointer);
+  els.geo.addEventListener('pointercancel', finishGeoPointer);
+  els.geo.addEventListener('lostpointercapture', finishGeoPointer);
+  els.geo.addEventListener('wheel', e => {
+    e.preventDefault();
+    // Scroll down = show more distant trajectory; scroll up = return toward metric scale.
+    const delta = clamp(e.deltaY, -120, 120);
+    geoRangeZoom = clamp(geoRangeZoom + delta * 0.0016, 0, 1);
+    drawGeometry();
+  }, { passive: false });
   els.geo.addEventListener('dblclick', () => {
     geoViewPreset = 'perspective';
     geoRot = { yaw: -0.9, pitch: 0.45 };
+    geoRangeZoom = 0;
     drawGeometry();
   });
   window.addEventListener('resize', render);

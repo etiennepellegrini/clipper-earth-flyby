@@ -6,8 +6,8 @@
   <title>Earth Flyby Visibility Explorer</title>
   <meta name="theme-color" content="#0b1020" />
   <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="./icon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="./styles.css" />
-  <link rel="icon" href="./icon.svg" type="image/svg+xml">
 </head>
 <body>
   <header class="hero">
@@ -97,16 +97,12 @@
       <div class="geometry-block">
         <div class="section-title geometry-title">Synced geometry</div>
         <div class="mini-toolbar" aria-label="Geometry view controls">
-          <button id="geoPresetEyes" title="Oblique near-Earth view">Eyes-ish</button>
-          <button id="geoPresetSun" title="Look roughly along the Sun direction">Sun line</button>
-          <button id="geoPresetNorth" title="Look down the north pole / equator frame">North</button>
-          <select id="geoScale" title="3D distance scale">
-            <option value="near" selected>Near pass scale</option>
-            <option value="compressed">Compressed full path</option>
-          </select>
+          <button id="geoPresetEyes" title="Oblique perspective view">Perspective</button>
+          <button id="geoPresetSun" title="Look from the Sun toward Earth">From Sun</button>
+          <button id="geoPresetNorth" title="Look down Earth's north-pole axis">North Pole</button>
         </div>
         <canvas id="geoCanvas" aria-label="Earth-centered 3D geometry view"></canvas>
-        <p class="muted small">Near-pass scale makes Earth and the close approach leg legible like NASA Eyes; distant parts of the ±window may leave the box. The Sun is drawn on the edge in its true projected direction, Earth day/night is shaded from the actual Sun vector, and the purple wedge is Earth's shadow. Drag to rotate.</p>
+        <p class="muted small">Drag to orbit. Scroll, trackpad-scroll, or pinch to reveal more or less of the trajectory while Earth stays the same size; double-click resets the view and range. The translucent sheet is the ecliptic plane.</p>
       </div>
     </aside>
 
