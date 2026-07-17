@@ -7,6 +7,12 @@
       "description": "Horizons target 137108;, closest sampled altitude 383477 km at 2027-08-07T07:09:28Z."
     },
     {
+      "id": "153814-2001-wn5-2028-earth-flyby",
+      "label": "153814 2001 WN5 \u00b7 Earth flyby \u00b7 2028-06-26",
+      "path": "data/153814-2001-wn5-2028-earth-flyby.json",
+      "description": "Horizons target 153814;, closest sampled altitude 242333 km at 2028-06-26T05:22:10Z."
+    },
+    {
       "id": "1p-halley-2061-earth-flyby",
       "label": "1P/Halley \u00b7 2061 return",
       "path": "data/1p-halley-2061-earth-flyby.json",
