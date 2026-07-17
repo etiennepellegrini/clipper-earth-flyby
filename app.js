@@ -761,18 +761,41 @@ function drawEarthShadow(ctx, cx, cy, x2, y2, earthR, projectionOpacity=1) {
   ctx.strokeStyle = 'rgba(182,144,255,.30)'; ctx.lineWidth = 1.2; ctx.setLineDash([8,6]); ctx.stroke();
   ctx.restore();
 }
+let earthRasterCanvas = null;
+let earthRasterContext = null;
+
+function getEarthRasterCanvas(pixelSize) {
+  if (!earthRasterCanvas) {
+    earthRasterCanvas = document.createElement('canvas');
+    earthRasterContext = earthRasterCanvas.getContext('2d');
+  }
+  if (earthRasterCanvas.width !== pixelSize || earthRasterCanvas.height !== pixelSize) {
+    earthRasterCanvas.width = pixelSize;
+    earthRasterCanvas.height = pixelSize;
+    earthRasterContext = earthRasterCanvas.getContext('2d');
+  }
+  return { canvas: earthRasterCanvas, ctx: earthRasterContext };
+}
+
 function drawShadedEarth(ctx, cx, cy, R, sunView) {
   const l = unit(sunView);
-  const minX = Math.floor(cx - R - 2), minY = Math.floor(cy - R - 2);
-  const size = Math.ceil(2 * R + 4);
-  const img = ctx.createImageData(size, size);
+  const padding = 2;
+  const cssSize = Math.ceil(2 * R + 2 * padding);
+  const cssCenter = cssSize / 2;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+  const pixelSize = Math.max(1, Math.ceil(cssSize * dpr));
+  const raster = getEarthRasterCanvas(pixelSize);
+  const img = raster.ctx.createImageData(pixelSize, pixelSize);
   const data = img.data;
-  for (let j=0; j<size; j++) {
-    for (let i=0; i<size; i++) {
-      const sx = minX + i + 0.5, sy = minY + j + 0.5;
-      const nx = (sx - cx) / R, ny = -(sy - cy) / R;
+
+  for (let j = 0; j < pixelSize; j++) {
+    for (let i = 0; i < pixelSize; i++) {
+      const localX = (i + 0.5) / dpr;
+      const localY = (j + 0.5) / dpr;
+      const nx = (localX - cssCenter) / R;
+      const ny = -(localY - cssCenter) / R;
       const rr = nx*nx + ny*ny;
-      const p = 4 * (j*size + i);
+      const p = 4 * (j*pixelSize + i);
       if (rr > 1) { data[p+3] = 0; continue; }
       const nz = Math.sqrt(Math.max(0, 1 - rr));
       const illum = nx*l[0] + ny*l[1] + nz*l[2];
@@ -797,7 +820,20 @@ function drawShadedEarth(ctx, cx, cy, R, sunView) {
       data[p+3] = a;
     }
   }
-  ctx.putImageData(img, minX, minY);
+
+  // putImageData replaces every pixel in its rectangular bounds, including
+  // transparent ones. Drawing the raster through drawImage instead performs
+  // normal alpha compositing, so the transparent corners no longer erase or
+  // cover trajectory, shadow, Sun, or target graphics behind the round Earth.
+  raster.ctx.putImageData(img, 0, 0);
+  ctx.drawImage(
+    raster.canvas,
+    cx - cssCenter,
+    cy - cssCenter,
+    cssSize,
+    cssSize,
+  );
+
   ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI*2);
   ctx.strokeStyle = 'rgba(220,240,255,.48)'; ctx.lineWidth = 1.5; ctx.stroke();
 }
