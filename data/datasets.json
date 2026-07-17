@@ -4,55 +4,55 @@
       "id": "europa-clipper-2026-earth-flyby",
       "label": "Europa Clipper \u00b7 Dec 2026",
       "path": "data/europa-clipper-2026-earth-flyby.json",
-      "description": "Horizons target -159, closest sampled altitude 3228 km at 2026-12-03T20:14:11Z."
+      "description": "C/A: 3,228 km on 2026-12-03 at 20:14:11 UTC."
     },
     {
       "id": "juice-2029-earth-flyby",
       "label": "JUICE \u00b7 Jan 2029",
       "path": "data/juice-2029-earth-flyby.json",
-      "description": "Horizons target -28, closest sampled altitude 4634 km at 2029-01-17T18:34:16Z."
+      "description": "C/A: 4,634 km on 2029-01-17 at 18:34:16 UTC."
     },
     {
       "id": "juice-2026-earth-flyby",
       "label": "JUICE \u00b7 Sep 2026",
       "path": "data/juice-2026-earth-flyby.json",
-      "description": "Horizons target -28, closest sampled altitude 8638 km at 2026-09-28T11:44:52Z."
+      "description": "C/A: 8,638 km on 2026-09-28 at 11:44:52 UTC."
     },
     {
       "id": "lucy-2030-earth-flyby",
       "label": "Lucy \u00b7 Dec 2030",
       "path": "data/lucy-2030-earth-flyby.json",
-      "description": "Horizons target -49, closest sampled altitude 615 km at 2030-12-27T00:36:10Z."
+      "description": "C/A: 615 km on 2030-12-27 at 00:36:10 UTC."
     },
     {
       "id": "osiris-apex-2029-earth-flyby",
       "label": "OSIRIS-APEX \u00b7 Apophis encounter \u00b7 Apr 2029",
       "path": "data/osiris-apex-2029-earth-flyby.json",
-      "description": "Horizons target -64, closest sampled altitude 1145 km at 2029-04-13T23:05:28Z."
+      "description": "C/A: 1,145 km on 2029-04-13 at 23:05:28 UTC."
     },
     {
       "id": "apophis-2029-earth-flyby",
       "label": "Apophis \u00b7 Apr 2029",
       "path": "data/apophis-2029-earth-flyby.json",
-      "description": "Horizons target 99942, closest sampled altitude 31633 km at 2029-04-13T21:45:04Z."
-    },
-    {
-      "id": "137108-1999-an10-2027-earth-flyby",
-      "label": "(137108) 1999 AN10 \u00b7 Aug 2027",
-      "path": "data/137108-1999-an10-2027-earth-flyby.json",
-      "description": "Horizons target 137108;, closest sampled altitude 383477 km at 2027-08-07T07:09:28Z."
-    },
-    {
-      "id": "153814-2001-wn5-2028-earth-flyby",
-      "label": "153814 2001 WN5 \u00b7 Earth flyby \u00b7 2028-06-26",
-      "path": "data/153814-2001-wn5-2028-earth-flyby.json",
-      "description": "Horizons target 153814;, closest sampled altitude 242333 km at 2028-06-26T05:22:10Z."
+      "description": "C/A: 31,633 km on 2029-04-13 at 21:45:04 UTC."
     },
     {
       "id": "1p-halley-2061-earth-flyby",
       "label": "1P/Halley \u00b7 2061 return",
       "path": "data/1p-halley-2061-earth-flyby.json",
-      "description": "Horizons target 90000030, closest sampled altitude 71413010 km at 2061-07-29T11:13:00Z."
+      "description": "C/A: 71,413,010 km on 2061-07-29 at 11:13:00 UTC."
+    },
+    {
+      "id": "137108-1999-an10-2027-earth-flyby",
+      "label": "(137108) 1999 AN10 \u00b7 Aug 2027",
+      "path": "data/137108-1999-an10-2027-earth-flyby.json",
+      "description": "C/A: 383,477 km on 2027-08-07 at 07:09:28 UTC."
+    },
+    {
+      "id": "153814-2001-wn5-2028-earth-flyby",
+      "label": "(153814) 2001 WN5 \u00b7 Jun 2028",
+      "path": "data/153814-2001-wn5-2028-earth-flyby.json",
+      "description": "C/A: 242,333 km on 2028-06-26 at 05:22:10 UTC."
     }
   ]
 }

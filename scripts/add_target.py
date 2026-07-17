@@ -233,12 +233,15 @@ def main() -> None:
     write_dataset(out, data)
 
     rel_path = rel_to_repo(out, repo_root)
-    label = args.label or f'{args.name} · Earth flyby · {closest_utc[:10] if closest_utc else approx_year}'
+    label = args.label or f'{args.name} · {closest_utc[:10] if closest_utc else approx_year}'
     closest_alt = metadata.get('closestSampleAltitudeKm')
     if args.description:
         description = args.description
     elif closest_alt is not None and closest_utc:
-        description = f'Horizons target {args.target}, closest sampled altitude {closest_alt:.0f} km at {closest_utc}.'
+        description = (
+            f"C/A: {closest_alt:,.0f} km on {closest_utc.split('T')[0]} at"
+            f" {closest_utc.split("T")[1].replace('Z', ' UTC')}."
+        )
     else:
         description = f'Horizons target {args.target}, searched around {args.approx_ca.isoformat()}.'
 

@@ -159,6 +159,7 @@ The included `.nojekyll` avoids Jekyll processing. Because this is a PWA with a 
 # Appendix: Targets
 
 ## Europa Clipper
+
 ```python
 python scripts/add_target.py \
   --target -159 \
@@ -169,6 +170,20 @@ python scripts/add_target.py \
   --step-sec 1 \
   --area-m2 140 \
   --albedo 0.22
+```
+
+## Apophis
+
+```python
+python scripts/add_target.py \
+  --target "99942;" \
+  --name "Apophis" \
+  --label "Apophis · Apr 2029" \
+  --approx-ca "2029-04-13 21:45" \
+  --hours 12 \
+  --step-sec 1 \
+  --diameter-m 340 \
+  --albedo 0.3
 ```
 
 ## JUICE — September 2026 Earth flyby
@@ -183,7 +198,7 @@ python scripts/add_target.py \
   --hours 12 \
   --step-sec 1 \
   --area-m2 85 \
-  --albedo 0.08
+  --albedo 0.22
 ```
 
 ## JUICE — January 2029 Earth flyby
@@ -198,7 +213,7 @@ python scripts/add_target.py \
   --hours 12 \
   --step-sec 1 \
   --area-m2 85 \
-  --albedo 0.08
+  --albedo 0.22
 ```
 
 ## OSIRIS-APEX near the Apophis encounter, April 2029

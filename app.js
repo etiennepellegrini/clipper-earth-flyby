@@ -856,13 +856,13 @@ function updateReadout() {
   const topoEcl = eclipticLonLat(s.topo.rhoEci);
   const geoEcl = eclipticLonLat(s.sc);
   const rows = [
-    ['Alt / Az', `${s.topo.alt.toFixed(1)}° / ${s.topo.az.toFixed(1)}°`],
+    ['Geocentric altitude', `${s.altitudeKm.toLocaleString(undefined,{maximumFractionDigits:0})} km`],
+    ['Range to Observer', `${s.topo.rangeKm.toLocaleString(undefined,{maximumFractionDigits:0})} km`],
+    ['Target Alt / Az', `${s.topo.alt.toFixed(1)}° / ${s.topo.az.toFixed(1)}°`],
     ['Topocentric RA / Dec', `${(topoEq.ra/15).toFixed(2)}h / ${topoEq.dec.toFixed(1)}°`],
     ['Topocentric ecl. lat', `${topoEcl.lat.toFixed(1)}°`],
     ['Geocentric ecl. lat', `${geoEcl.lat.toFixed(1)}°`],
-    ['Range', `${s.topo.rangeKm.toLocaleString(undefined,{maximumFractionDigits:0})} km`],
-    ['Geocentric altitude', `${s.altitudeKm.toLocaleString(undefined,{maximumFractionDigits:0})} km`],
-    ['Sun altitude', `${s.sunTopo.alt.toFixed(1)}°`],
+    ['Sun Alt / Az', `${s.sunTopo.alt.toFixed(1)}° / ${s.sunTopo.az.toFixed(1)}°`],
     ['Target lighting', `${s.ecl.state}${s.ecl.state==='penumbra' ? ` (${Math.round(s.ecl.fraction*100)}%)` : ''}`],
     ['Phase angle', `${s.alpha.toFixed(1)}°`],
     ['Rough magnitude', `${s.mag.toFixed(1)}`],
@@ -974,8 +974,9 @@ async function loadDataset(datasetIndex = 0) {
   const isDemo = (eph.meta.source || '').includes('DEMO');
   els.dataStatus.textContent = isDemo ? 'Demo ephemeris · replace with Horizons' : `${targetName()} · ${eph.times.length} samples`;
   els.dataStatus.className = 'status-pill ' + (isDemo ? 'warn' : 'good');
-  const ca = eph.meta.closestSampleUtc ? ` · closest sample ${eph.meta.closestSampleUtc.replace('T',' ').replace('Z',' UTC')}` : '';
-  els.missionEyebrow.textContent = `${targetName()}${ca}`;
+  const ca_date = eph.meta.closestSampleUtc ? ` · ${eph.meta.closestSampleUtc.replace('T',' ').replace('Z',' UTC')}` : '';
+  const ca_alt = eph.meta.closestSampleAltitudeKm ? ` · ${Number(eph.meta.closestSampleAltitudeKm).toFixed(1)} km` : '';
+  els.missionEyebrow.textContent = `${targetName()}${ca_date}${ca_alt}`;
   els.datasetHint.textContent = dataset.description || `Loaded ${path}`;
   document.title = `${targetName()} Visibility Explorer`;
   els.provenance.innerHTML = provenanceHtml(eph.meta);

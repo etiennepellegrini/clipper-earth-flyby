@@ -13,8 +13,8 @@
   <header class="hero">
     <div>
       <p class="eyebrow" id="missionEyebrow">Earth flyby visibility explorer</p>
-      <h1>Can anyone see the flyby?</h1>
-      <p class="subhead">Topocentric sky path, darkness, Earth shadow, rough brightness, and a synced near-Earth 3D geometry view. Ephemerides are loaded from pre-saved JSON datasets.</p>
+      <h1>Can I see this flyby?</h1>
+      <p class="subhead">Topocentric sky path of Earth closest approaches.</p>
     </div>
     <div class="status-pill" id="dataStatus">Loading ephemeris…</div>
   </header>
@@ -69,14 +69,14 @@
         <label>Limiting mag<br><input id="magLimit" type="number" min="0" max="20" step="0.1" value="6.5"></label>
         <label>Min altitude<br><input id="minAlt" type="number" min="0" max="80" step="1" value="10"></label>
       </div>
-      <p class="muted small">Magnitude is a deliberately rough diffuse-area proxy. It does not model attitude, BRDF, solar-array glints, asteroid phase laws, or sky brightness, so it is a guide for “worth trying,” not a prediction.</p>
+      <p class="muted small">Note: Magnitude is a deliberately rough diffuse-area proxy. It does not model attitude, BRDF, solar-array glints, asteroid phase laws, etc.</p>
     </section>
 
     <section class="panel visual-panel" aria-label="Sky view">
       <div class="panel-header visual-header">
         <div>
           <div class="section-title">Sky from observer</div>
-          <p class="muted">Polar chart: center = zenith, rim = horizon, north at top, east at right. Above-horizon path is drawn inside the disk; current below-horizon bearing is parked just outside the rim.</p>
+          <p class="muted">Polar sky chart (center = zenith, rim = horizon)</p>
         </div>
         <div class="legend">
           <span><i class="swatch visible"></i>visible-ish</span>
@@ -103,7 +103,7 @@
           <button id="geoPresetNorth" title="Look down Earth's north-pole axis">North Pole</button>
         </div>
         <canvas id="geoCanvas" aria-label="Earth-centered 3D geometry view"></canvas>
-        <p class="muted small">Drag to orbit. Scroll, trackpad-scroll, or pinch to reveal more or less of the trajectory while Earth stays the same size; double-click resets the view and range. The translucent sheet is the ecliptic plane.</p>
+        <p class="muted small">Drag to move. Scroll/pinch to zoom. Double-click to reset the view.</p>
       </div>
     </aside>
 
