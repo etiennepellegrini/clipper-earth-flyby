@@ -25,6 +25,12 @@
       "description": "Horizons target -28, closest sampled altitude 8638 km at 2026-09-28T11:44:52Z."
     },
     {
+      "id": "lucy-2030-earth-flyby",
+      "label": "Lucy \u00b7 Dec 2030",
+      "path": "data/lucy-2030-earth-flyby.json",
+      "description": "Horizons target -49, closest sampled altitude 615 km at 2030-12-27T00:36:10Z."
+    },
+    {
       "id": "osiris-apex-2029-earth-flyby",
       "label": "OSIRIS-APEX \u00b7 Apophis encounter \u00b7 Apr 2029",
       "path": "data/osiris-apex-2029-earth-flyby.json",
