@@ -3,6 +3,13 @@
 const RE_KM = 6378.137;
 const RSUN_KM = 695700;
 const AU_KM = 149597870.7;
+const COARSE_LAT_STEP = 2;
+const COARSE_LON_STEP = 2;
+const COARSE_TIME_STEP = 5;
+
+// One-line switch for the optional 3D ecliptic reference ring.
+const SHOW_ECLIPTIC_REFERENCE = false;
+const ECLIPTIC_REFERENCE_RADIUS_ER = 1.58;
 const PLACES = {
   santaMonica: { lat: 34.0195, lon: -118.4912, height: 30, label: 'Santa Monica, CA' },
   strasbourg: { lat: 48.5734, lon: 7.7521, height: 142, label: 'Strasbourg, France' },
@@ -29,7 +36,7 @@ let bestCache = [];
 let geoRot = { yaw: -0.9, pitch: 0.45 };
 let geoViewPreset = 'perspective';
 let dragging = false, lastDrag = null;
-let geoRangeZoom = 0; // 0 = true near-Earth scale; 1 = strongly compressed full-pass scale.
+let geoRangeZoom = 0; // 0 = close true-scale view; 1 = wide hybrid overview.
 const geoPointers = new Map();
 let geoPinch = null;
 
@@ -289,27 +296,46 @@ function project3(v) {
   const basis = cameraBasis();
   return [dot(v, basis.right), dot(v, basis.up), dot(v, basis.forward)];
 }
-function rangeCompressionStrength() {
-  // Keep the near-Earth neighborhood nearly metric while smoothly compressing
-  // distant trajectory legs.  The exponential range gives useful control at both
-  // ends: small wheel changes near zero remain gentle; the far end can fit an
-  // entire multi-hour/day pass without shrinking Earth.
-  if (geoRangeZoom <= 1e-4) return 0;
-  return 0.02 * Math.pow(250, geoRangeZoom);
+function smoothstep(edge0, edge1, x) {
+  const t = clamp((x - edge0) / Math.max(1e-12, edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
 }
-function mappedRangeER(rER) {
-  // Preserve the actual close-pass geometry through 2.5 Earth radii. Range zoom
-  // only bends the distant legs inward, so Earth and the encounter neighborhood
-  // do not appear to breathe as the user scrolls.
-  const pivotER = 2.5;
-  if (rER <= pivotER || geoRangeZoom <= 1e-4) return rER;
-  const k = rangeCompressionStrength();
-  return pivotER + Math.asinh(k * (rER - pivotER)) / k;
+function geometryZoomState(w, h) {
+  // First behave like a normal camera zoom: Earth and the trajectory both shrink.
+  // Once Earth reaches a still-readable size, progressively contract the *whole
+  // trajectory affinely about the closest-approach point*. Unlike radial/log
+  // compression, an affine contraction preserves the path's shape and does not
+  // make a straight approach curl around Earth.
+  const minDim = Math.min(w, h);
+  const baseEarthR = clamp(minDim * 0.145, 44, 78);
+  const earthShrink = 1 - 0.50 * smoothstep(0, 0.76, geoRangeZoom);
+  const earthR = baseEarthR * earthShrink;
+
+  const caIdx = findClosestSample();
+  const caER = mul(eph.sc[caIdx], 1 / RE_KM);
+  let maxDeltaER = 1;
+  for (const v of eph.sc) {
+    maxDeltaER = Math.max(maxDeltaER, norm(sub(mul(v, 1 / RE_KM), caER)));
+  }
+
+  // At maximum overview, aim to fit most/all of the pass inside the canvas while
+  // keeping Earth at roughly half its close-view diameter. The contraction is a
+  // single scalar applied about CA, so trajectory shape is preserved exactly.
+  const availableRadiusPx = minDim * 0.43;
+  const availableRadiusER = availableRadiusPx / earthR;
+  const caOffsetER = norm(caER);
+  const fitScale = clamp((availableRadiusER - caOffsetER) / maxDeltaER, 0.025, 1);
+  const overviewBlend = smoothstep(0.58, 1, geoRangeZoom);
+  const trajectoryScale = 1 - (1 - fitScale) * overviewBlend;
+
+  return { earthR, caER, trajectoryScale };
 }
-function rangeMapVec(v) {
-  const r = norm(v);
-  if (r === 0) return [0,0,0];
-  return mul(unit(v), mappedRangeER(r / RE_KM));
+function targetSceneVec(v, caER, trajectoryScale) {
+  const vER = mul(v, 1 / RE_KM);
+  return add(caER, mul(sub(vER, caER), trajectoryScale));
+}
+function earthSceneVec(v) {
+  return mul(v, 1 / RE_KM);
 }
 function drawGeometry() {
   const { ctx, w, h } = prepareCanvas(els.geo);
@@ -322,14 +348,14 @@ function drawGeometry() {
   if (geoViewPreset === 'sun') geoRot = yawPitchForDirection(unit(now.sun));
   else if (geoViewPreset === 'north') geoRot = { yaw: 0, pitch: Math.PI / 2 };
 
-  const maxRER = Math.max(...eph.rangeSamples) / RE_KM;
-  const minDim = Math.min(w, h);
-  const earthR = clamp(minDim * 0.115, 34, 68);
-  const scale = earthR; // Scene units are Earth radii; Earth stays fixed while range zoom changes.
+  const { earthR, caER, trajectoryScale } = geometryZoomState(w, h);
+  const scale = earthR;
   const cx = w * 0.55;
   const cy = h * 0.53;
   const earthSceneR = 1;
-  const cameraDistance = 16.25;
+  // A slightly longer focal distance in overview mode keeps the widening view from
+  // feeling excessively fish-eyed while retaining useful depth cues.
+  const cameraDistance = 16.25 + 2.25 * smoothstep(0.35, 1, geoRangeZoom);
   const sunDir = unit(now.sun);
   const sunView = unit(project3(sunDir));
   const sunProjection = projectedScreenDirection(sunView);
@@ -358,7 +384,8 @@ function drawGeometry() {
       scene,
     };
   }
-  function mapRaw(v) { return projectScene(rangeMapVec(v)); }
+  function mapTarget(v) { return projectScene(targetSceneVec(v, caER, trajectoryScale)); }
+  function mapEarth(v) { return projectScene(earthSceneVec(v)); }
 
   if (sunProjection.visible) drawProjectedSun(ctx, cx, cy, earthR, w, h, sunProjection);
 
@@ -369,14 +396,17 @@ function drawGeometry() {
     drawEarthShadow(ctx, cx, cy, shEdge.x, shEdge.y, earthR, sunProjection.opacity);
   }
 
-  // A real perspective ecliptic sheet, split by camera depth.  It is an annulus,
-  // not a floating 2-D ellipse, and is clipped away from Earth's solid disk.
-  const eps = rad(23.439291111);
-  const eclipticX = [1, 0, 0];
-  const eclipticY = [0, Math.cos(eps), Math.sin(eps)];
-  const planeOuterR = clamp(mappedRangeER(Math.min(maxRER, 12)), 2.8, 5.2);
-  const eclipticTiles = buildPlaneTiles(projectScene, eclipticX, eclipticY, 1.12, planeOuterR);
-  drawPlaneTiles(ctx, eclipticTiles.back, cx, cy, earthR, w, h, false);
+  // Optional ecliptic reference: a thin spatial ring rather than a filled plane.
+  // The rear half is painted now and will be naturally occluded by Earth; the
+  // foreground half is painted later. Toggle with SHOW_ECLIPTIC_REFERENCE above.
+  let eclipticRing = null;
+  if (SHOW_ECLIPTIC_REFERENCE) {
+    const eps = rad(23.439291111);
+    const eclipticX = [1, 0, 0];
+    const eclipticY = [0, Math.cos(eps), Math.sin(eps)];
+    eclipticRing = buildSpatialRing(projectScene, eclipticX, eclipticY, ECLIPTIC_REFERENCE_RADIUS_ER);
+    drawSpatialRing(ctx, eclipticRing.back, false);
+  }
 
   // Build the path once, then use painter-style depth ordering.
   const backSegments = [];
@@ -384,7 +414,7 @@ function drawGeometry() {
   let last = null;
   const stride = Math.max(1, Math.floor(eph.times.length / 900));
   for (let i=0; i<eph.times.length; i+=stride) {
-    const p = mapRaw(eph.sc[i]);
+    const p = mapTarget(eph.sc[i]);
     if (!p.inFrontOfCamera) { last = null; continue; }
     const current = { ...p, cls: pathClass(sampleAt(i, obs)) };
     if (last) {
@@ -411,7 +441,7 @@ function drawGeometry() {
     ctx.restore();
   }
 
-  const sp = mapRaw(now.sc);
+  const sp = mapTarget(now.sc);
   const targetBehind = sp.inFrontOfCamera && sp.z < 0;
   const targetOverEarth = sp.inFrontOfCamera && Math.hypot(sp.x - cx, sp.y - cy) < earthR * 1.02;
 
@@ -451,9 +481,9 @@ function drawGeometry() {
     ctx.strokeStyle = 'rgba(40,25,5,.55)'; ctx.lineWidth = 1; ctx.stroke();
   }
 
-  // Foreground half of the ecliptic sheet is drawn after Earth, but clipped out of
-  // the globe itself. Foreground trajectory remains on top of the reference plane.
-  drawPlaneTiles(ctx, eclipticTiles.front, cx, cy, earthR, w, h, true);
+  // Foreground half of the optional ecliptic ring. It has no fill, so it cannot
+  // pick up odd pseudo-shadow artifacts or compete with the trajectory.
+  if (eclipticRing) drawSpatialRing(ctx, eclipticRing.front, true);
   drawSegments(frontSegments, false);
 
   // Observer marker and local zenith. A far-side station remains visible as a dim,
@@ -461,10 +491,10 @@ function drawGeometry() {
   const obsVec = observerEci(obs.lat, obs.lon, obs.height, now.date);
   const obsView = project3(unit(obsVec));
   const obsFront = obsView[2] > earthSceneR / cameraDistance;
-  const op = mapRaw(obsVec);
+  const op = mapEarth(obsVec);
   if (op.inFrontOfCamera) {
     if (obsFront) {
-      const zen = mapRaw(mul(unit(obsVec), RE_KM * 1.85));
+      const zen = mapEarth(mul(unit(obsVec), RE_KM * 1.85));
       if (zen.inFrontOfCamera) {
         ctx.beginPath(); ctx.moveTo(op.x, op.y); ctx.lineTo(zen.x, zen.y);
         ctx.strokeStyle = 'rgba(255,255,255,.36)'; ctx.lineWidth = 1.2; ctx.stroke();
@@ -485,59 +515,37 @@ function drawGeometry() {
 }
 
 
-function buildPlaneTiles(projectScene, basis1, basis2, innerR, outerR) {
-  const tiles = { back: [], front: [] };
-  const angularSteps = 48;
-  const radialSteps = 3;
-  for (let ir=0; ir<radialSteps; ir++) {
-    const r0 = innerR + (outerR - innerR) * ir / radialSteps;
-    const r1 = innerR + (outerR - innerR) * (ir + 1) / radialSteps;
-    for (let ia=0; ia<angularSteps; ia++) {
-      const a0 = 2 * Math.PI * ia / angularSteps;
-      const a1 = 2 * Math.PI * (ia + 1) / angularSteps;
-      const scenePoints = [
-        add(mul(basis1, r0*Math.cos(a0)), mul(basis2, r0*Math.sin(a0))),
-        add(mul(basis1, r1*Math.cos(a0)), mul(basis2, r1*Math.sin(a0))),
-        add(mul(basis1, r1*Math.cos(a1)), mul(basis2, r1*Math.sin(a1))),
-        add(mul(basis1, r0*Math.cos(a1)), mul(basis2, r0*Math.sin(a1))),
-      ];
-      const points = scenePoints.map(projectScene);
-      if (points.some(p => !p.inFrontOfCamera)) continue;
-      const z = points.reduce((sum, p) => sum + p.z, 0) / points.length;
-      (z < 0 ? tiles.back : tiles.front).push({ points, z, radial: ir, angular: ia });
+function buildSpatialRing(projectScene, basis1, basis2, radiusER) {
+  const ring = { back: [], front: [] };
+  const steps = 240;
+  let previous = null;
+  for (let i=0; i<=steps; i++) {
+    const t = 2 * Math.PI * i / steps;
+    const scene = add(mul(basis1, radiusER * Math.cos(t)), mul(basis2, radiusER * Math.sin(t)));
+    const point = projectScene(scene);
+    if (!point.inFrontOfCamera) { previous = null; continue; }
+    if (previous) {
+      const segment = { a: previous, b: point, z: (previous.z + point.z) * 0.5 };
+      (segment.z < 0 ? ring.back : ring.front).push(segment);
     }
+    previous = point;
   }
-  tiles.back.sort((a,b) => a.z - b.z);
-  tiles.front.sort((a,b) => a.z - b.z);
-  return tiles;
+  return ring;
 }
 
-function drawPlaneTiles(ctx, tiles, cx, cy, earthR, w, h, foreground) {
-  if (!tiles.length) return;
+function drawSpatialRing(ctx, segments, foreground) {
+  if (!segments.length) return;
   ctx.save();
-  // Keep the reference sheet outside the opaque globe. The even-odd clip makes the
-  // plane read as a 3-D annulus passing behind/in front of Earth rather than paint.
-  ctx.beginPath();
-  ctx.rect(0, 0, w, h);
-  ctx.moveTo(cx + earthR * 1.035, cy);
-  ctx.arc(cx, cy, earthR * 1.035, 0, Math.PI * 2);
-  try { ctx.clip('evenodd'); } catch (_) { ctx.clip(); }
-
-  for (const tile of tiles) {
-    const pts = tile.points;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = foreground ? 'rgba(255,211,110,.42)' : 'rgba(255,211,110,.13)';
+  ctx.lineWidth = foreground ? 1.35 : 0.95;
+  ctx.setLineDash(foreground ? [7,5] : [3,7]);
+  for (const segment of segments) {
     ctx.beginPath();
-    ctx.moveTo(pts[0].x, pts[0].y);
-    for (let i=1; i<pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-    ctx.closePath();
-    ctx.fillStyle = foreground ? 'rgba(255,211,110,.030)' : 'rgba(255,211,110,.016)';
-    ctx.fill();
-    // Sparse mesh lines imply a plane without recreating the old floating dotted ellipse.
-    if (tile.angular % 4 === 0 || tile.radial === 2) {
-      ctx.strokeStyle = foreground ? 'rgba(255,211,110,.18)' : 'rgba(255,211,110,.09)';
-      ctx.lineWidth = foreground ? 0.9 : 0.7;
-      ctx.setLineDash(tile.radial === 2 ? [5,6] : [2,7]);
-      ctx.stroke();
-    }
+    ctx.moveTo(segment.a.x, segment.a.y);
+    ctx.lineTo(segment.b.x, segment.b.y);
+    ctx.stroke();
   }
   ctx.restore();
 }
@@ -902,12 +910,12 @@ function scanBestLocations() {
   setTimeout(() => {
     const obsBase = getObserver();
     const sampleSec = Math.max(1, (eph.dates[1] - eph.dates[0]) / 1000 || 60);
-    const coarseStride = Math.max(1, Math.round((5*60) / sampleSec));
+    const coarseStride = Math.max(1, Math.round((COARSE_TIME_STEP*60) / sampleSec));
 
     let best = scanWindowForBest(null, obsBase, {
       i0: 0, i1: eph.times.length - 1, iStep: coarseStride,
-      lat0: -85, lat1: 85, latStep: 5,
-      lon0: -180, lon1: 175, lonStep: 5,
+      lat0: -85, lat1: 85, latStep: COARSE_LAT_STEP,
+      lon0: -180, lon1: 175, lonStep: COARSE_LON_STEP,
     });
 
     if (!best) {
@@ -1029,7 +1037,7 @@ function wireEvents() {
     if (geoPointers.size >= 2 && geoPinch) {
       const d = pointerDistance();
       if (d > 0 && geoPinch.distance > 0) {
-        // Pinching inward reveals more of the pass; spreading returns toward true scale.
+        // Pinching inward moves toward the wide hybrid overview; spreading zooms back in.
         geoRangeZoom = clamp(geoPinch.zoom - Math.log(d / geoPinch.distance) * 0.72, 0, 1);
         drawGeometry();
       }
@@ -1048,7 +1056,7 @@ function wireEvents() {
   els.geo.addEventListener('lostpointercapture', finishGeoPointer);
   els.geo.addEventListener('wheel', e => {
     e.preventDefault();
-    // Scroll down = show more distant trajectory; scroll up = return toward metric scale.
+    // Scroll down = wider hybrid overview; scroll up = closer true-scale view.
     const delta = clamp(e.deltaY, -120, 120);
     geoRangeZoom = clamp(geoRangeZoom + delta * 0.0016, 0, 1);
     drawGeometry();
