@@ -154,3 +154,145 @@ The included `.nojekyll` avoids Jekyll processing. Because this is a PWA with a 
 - The built-in `data/clipper_ega.json` may be a synthetic demo if you have not overwritten it with Horizons output.
 - Magnitude is intentionally rough. Spacecraft attitude, solar-array glints, asteroid phase functions, atmospheric extinction, moonlight, clouds, terrain, and airspace are not modeled.
 - The best-spot scan is geometric/photometric only; it is not an observing recommendation.
+
+
+# Appendix: Targets
+
+## Europa Clipper
+```python
+python scripts/add_target.py \
+  --target -159 \
+  --name "Europa Clipper" \
+  --label "Europa Clipper · Dec 2026" \
+  --approx-ca "2026-12-03 21:15" \
+  --hours 12 \
+  --step-sec 1 \
+  --area-m2 140 \
+  --albedo 0.22
+```
+
+## JUICE — September 2026 Earth flyby
+A very large spacecraft with 85 m² of solar panels, making it an excellent shadow/parallax example. ESA’s cruise plan includes Earth assists in 2026 and 2029.
+
+```python
+python scripts/add_target.py \
+  --target -28 \
+  --name "JUICE" \
+  --label "JUICE · Sep 2026" \
+  --approx-ca "2026-09-15 00:00" \
+  --hours 12 \
+  --step-sec 1 \
+  --area-m2 85 \
+  --albedo 0.08
+```
+
+## JUICE — January 2029 Earth flyby
+Its last Earth gravity assist before heading outward toward Jupiter. The contrast with its 2026 ground track should be particularly interesting.
+
+```python
+python scripts/add_target.py \
+  --target -28 \
+  --name "JUICE" \
+  --label "JUICE · Jan 2029" \
+  --approx-ca "2029-01-15 00:00" \
+  --hours 12 \
+  --step-sec 1 \
+  --area-m2 85 \
+  --albedo 0.08
+```
+
+## OSIRIS-APEX near the Apophis encounter, April 2029
+This would be fun specifically because you could switch between Apophis and the spacecraft sent to study it. OSIRIS-APEX has 8.5 m² of solar panels, and Horizons carries it under `-64`.
+
+```python
+python scripts/add_target.py \
+  --target -64 \
+  --name "OSIRIS-APEX" \
+  --label "OSIRIS-APEX · Apophis encounter · Apr 2029" \
+  --approx-ca "2029-04-13 00:00" \
+  --hours 12 \
+  --step-sec 1 \
+  --area-m2 8.5 \
+  --albedo 0.22
+```
+
+## Lucy — December 2030 Earth gravity assist
+Lucy has two 7.3 m-diameter circular arrays, totaling about 83.7 m² geometrically. Its mission timeline places its third Earth flyby in late December 2030.
+
+```python
+python scripts/add_target.py \
+  --target -49 \
+  --name "Lucy" \
+  --label "Lucy · Dec 2030" \
+  --approx-ca "2030-12-26 00:00" \
+  --hours 12 \
+  --step-sec 1 \
+  --area-m2 83.7 \
+  --albedo 0.22
+```
+
+## (153814) 2001 WN5
+Probably the best additional natural object: about 932 m across, only 0.65 lunar distances away, predicted to peak near magnitude 6.9. Its measured geometric albedo is about 0.097.
+
+```python
+python scripts/add_target.py \
+  --target "153814;" \
+  --name "(153814) 2001 WN5" \
+  --label "(153814) 2001 WN5 · Jun 2028" \
+  --approx-ca "2028-06-26 05:23" \
+  --hours 12 \
+  --step-sec 1 \
+  --diameter-m 932 \
+  --albedo 0.097
+```
+
+## (137108) 1999 AN10
+Roughly 800 m across, passing at about 1.01 lunar distances; predicted peak magnitude about 7.6.
+
+```python
+python scripts/add_target.py \
+  --target "137108;" \
+  --name "(137108) 1999 AN10" \
+  --label "(137108) 1999 AN10 · Aug 2027" \
+  --approx-ca "2027-08-07 00:00" \
+  --hours 12 \
+  --step-sec 1 \
+  --diameter-m 800 \
+  --albedo 0.15
+```
+
+## Hayabusa2 — December 2027 Earth swing-by
+
+JAXA plans two extended-mission Earth swing-bys, in 2027 and 2028.
+
+NOTE: no traj found on Horizons
+
+```python
+python scripts/add_target.py \
+  --target -37 \
+  --name "Hayabusa2" \
+  --label "Hayabusa2 · Dec 2027" \
+  --approx-ca "2027-12-15 00:00" \
+  --hours 12 \
+  --step-sec 1 \
+  --area-m2 5.75 \
+  --albedo 0.22
+```
+
+## Hayabusa2 — June 2028 Earth swing-by
+Same spacecraft, but a different approach direction, lighting geometry, ground track, and best observing region.
+
+NOTE: no traj found on Horizons
+
+```python
+python scripts/add_target.py \
+  --target -37 \
+  --name "Hayabusa2" \
+  --label "Hayabusa2 · Jun 2028" \
+  --approx-ca "2028-06-15 00:00" \
+  --hours 12 \
+  --step-sec 1 \
+  --area-m2 5.75 \
+  --albedo 0.22
+```
+

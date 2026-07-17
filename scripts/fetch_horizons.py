@@ -316,9 +316,6 @@ def main() -> None:
         'sun_eci_km': [[round(x, 3) for x in row['r']] for row in sun_rows],
         'object_eci_km_s': [[round(x, 9) for x in row.get('v', [0, 0, 0])] for row in target_rows],
     }
-    if args.target == '-159':
-        data['clipper_eci_km'] = data['object_eci_km']
-        data['clipper_eci_km_s'] = data['object_eci_km_s']
 
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(data, separators=(',', ':')))
