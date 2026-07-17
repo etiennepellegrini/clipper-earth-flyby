@@ -11,10 +11,44 @@ const COARSE_TIME_STEP = 5;
 const SHOW_ECLIPTIC_REFERENCE = false;
 const ECLIPTIC_REFERENCE_RADIUS_ER = 1.58;
 
-// Display range is intentionally compressed even in the close view. A value of
-// 1 would be physically distance-to-scale; smaller values pull the target toward
-// the selected station while preserving its exact topocentric direction.
+// 3D zoom tuning ------------------------------------------------------------
+// Set false for ordinary camera zoom throughout: Earth and the trajectory keep
+// shrinking together, with no second-stage range compression.
+const ENABLE_OVERVIEW_RANGE_COMPRESSION = false;
+
+// Smallest Earth size relative to the initial close-view size.
+// - Natural-only mode: reached at maximum zoom-out.
+// - Hybrid mode: reached when OVERVIEW_BLEND_START is reached, then held fixed.
+const NATURAL_ZOOM_MIN_SCALE = 0.12;
+
+// In hybrid mode, ordinary camera zoom runs from geoRangeZoom 0 to this value;
+// after this point, Earth stays at NATURAL_ZOOM_MIN_SCALE while the app blends
+// into station-centered topocentric range compression. Use a value close to 1
+// to delay the second stage. Ignored when ENABLE_OVERVIEW_RANGE_COMPRESSION=false.
+const OVERVIEW_BLEND_START = 0.54;
+
+// Close-view target-range scaling --------------------------------------------
+// Automatically choose the initial station-to-target range scale from the
+// dataset's geocentric closest-approach clearance. This keeps very close passes
+// such as Europa Clipper near physical scale, while pulling more distant passes
+// such as Apophis closer for readability.
+const AUTO_CLOSE_VIEW_RANGE_SCALE = true;
+
+// Manual/fallback value. Used when automatic scaling is disabled or the dataset
+// does not contain usable target vectors. 1.0 is physical distance-to-scale;
+// smaller values pull the target toward the selected station while preserving
+// its exact topocentric direction.
 const CLOSE_VIEW_TOPOCENTRIC_RANGE_SCALE = 0.62;
+
+// Automatic mode tries to display the closest possible surface clearance at
+// approximately this many Earth radii. Example: Apophis is about 5 R_E above
+// Earth's surface, so 3.1 / 5 ~= 0.62. Clipper is only about 0.5 R_E above the
+// surface, so the result is clamped to 1.0 (no close-view compression).
+const TARGET_DISPLAYED_CA_CLEARANCE_ER = 3.1;
+
+// Safety bounds for automatic scaling of unusually near or distant targets.
+const MIN_AUTO_CLOSE_VIEW_RANGE_SCALE = 0.03;
+const MAX_AUTO_CLOSE_VIEW_RANGE_SCALE = 1.0;
 const PLACES = {
   santaMonica: { lat: 34.0195, lon: -118.4912, height: 30, label: 'Santa Monica, CA' },
   strasbourg: { lat: 48.5734, lon: 7.7521, height: 142, label: 'Strasbourg, France' },
@@ -42,6 +76,7 @@ let geoRot = { yaw: -0.9, pitch: 0.45 };
 let geoViewPreset = 'perspective';
 let dragging = false, lastDrag = null;
 let geoRangeZoom = 0; // 0 = close readable view; 1 = wide topocentric overview.
+let closeViewTopocentricRangeScale = CLOSE_VIEW_TOPOCENTRIC_RANGE_SCALE;
 const geoPointers = new Map();
 let geoPinch = null;
 
@@ -305,19 +340,62 @@ function smoothstep(edge0, edge1, x) {
   const t = clamp((x - edge0) / Math.max(1e-12, edge1 - edge0), 0, 1);
   return t * t * (3 - 2 * t);
 }
+function computeCloseViewTopocentricRangeScale(targetVectors) {
+  if (!AUTO_CLOSE_VIEW_RANGE_SCALE) {
+    return CLOSE_VIEW_TOPOCENTRIC_RANGE_SCALE;
+  }
+
+  let minCenterRangeKm = Infinity;
+  for (const position of targetVectors || []) {
+    if (!Array.isArray(position) || position.length < 3) continue;
+    const centerRangeKm = Math.hypot(position[0], position[1], position[2]);
+    if (Number.isFinite(centerRangeKm)) {
+      minCenterRangeKm = Math.min(minCenterRangeKm, centerRangeKm);
+    }
+  }
+
+  if (!Number.isFinite(minCenterRangeKm)) {
+    return CLOSE_VIEW_TOPOCENTRIC_RANGE_SCALE;
+  }
+
+  // Use geocentric altitude as a stable, station-independent approximation of
+  // the minimum possible topocentric range at the sub-object point.
+  const closestClearanceER = Math.max(
+    (minCenterRangeKm - RE_KM) / RE_KM,
+    0.05,
+  );
+
+  return clamp(
+    TARGET_DISPLAYED_CA_CLEARANCE_ER / closestClearanceER,
+    MIN_AUTO_CLOSE_VIEW_RANGE_SCALE,
+    MAX_AUTO_CLOSE_VIEW_RANGE_SCALE,
+  );
+}
 function geometryZoomState(w, h, obs) {
-  // Stage 1 feels like an ordinary camera zoom: Earth and every scene element
-  // shrink together. Earth stops shrinking while it is still large enough to read
-  // the station, equator, and day/night geometry.
   const minDim = Math.min(w, h);
   const baseEarthR = clamp(minDim * 0.145, 44, 78);
-  const earthShrink = 1 - 0.48 * smoothstep(0, 0.70, geoRangeZoom);
+  const minScale = clamp(NATURAL_ZOOM_MIN_SCALE, 0.01, 1);
+  const boundary = clamp(OVERVIEW_BLEND_START, 0.01, 0.999);
+
+  // Natural-only mode: Earth and every scene element shrink together all the way
+  // to NATURAL_ZOOM_MIN_SCALE. No second-stage range compression is applied.
+  if (!ENABLE_OVERVIEW_RANGE_COMPRESSION) {
+    const earthShrink = Math.pow(minScale, geoRangeZoom);
+    return {
+      earthR: baseEarthR * earthShrink,
+      topocentricRangeScale: closeViewTopocentricRangeScale,
+    };
+  }
+
+  // Hybrid mode, stage 1: ordinary camera zoom until the configured boundary.
+  // Earth reaches NATURAL_ZOOM_MIN_SCALE exactly at OVERVIEW_BLEND_START.
+  const naturalProgress = clamp(geoRangeZoom / boundary, 0, 1);
+  const earthShrink = Math.pow(minScale, naturalProgress);
   const earthR = baseEarthR * earthShrink;
 
-  // Stage 2 uniformly scales each sample's station-to-target vector. This preserves
-  // the target's exact altitude/azimuth from the selected station at every epoch:
-  // displayedTarget - station is always parallel to realTarget - station.
-  // It sacrifices only range, not line of sight.
+  // Hybrid mode, stage 2: hold Earth at its minimum readable size and uniformly
+  // scale each sample's station-to-target vector. This preserves exact apparent
+  // altitude/azimuth from the selected station while fitting more of the pass.
   let maxTopocentricRangeER = 1;
   const stride = Math.max(1, Math.floor(eph.sc.length / 4000));
   for (let i = 0; i < eph.sc.length; i += stride) {
@@ -328,19 +406,17 @@ function geometryZoomState(w, h, obs) {
     );
   }
 
-  // Use a conservative bound: the station is about one Earth radius from center,
-  // so 1 + scaled topocentric range fits inside availableRadiusER.
   const availableRadiusPx = minDim * 0.43;
   const availableRadiusER = availableRadiusPx / earthR;
   const fitScale = clamp(
     (availableRadiusER - 1.08) / maxTopocentricRangeER,
     0.018,
-    CLOSE_VIEW_TOPOCENTRIC_RANGE_SCALE,
+    closeViewTopocentricRangeScale,
   );
-  const overviewBlend = smoothstep(0.54, 1, geoRangeZoom);
+  const overviewBlend = smoothstep(boundary, 1, geoRangeZoom);
   const topocentricRangeScale =
-    CLOSE_VIEW_TOPOCENTRIC_RANGE_SCALE +
-    (fitScale - CLOSE_VIEW_TOPOCENTRIC_RANGE_SCALE) * overviewBlend;
+    closeViewTopocentricRangeScale +
+    (fitScale - closeViewTopocentricRangeScale) * overviewBlend;
 
   return { earthR, topocentricRangeScale };
 }
@@ -368,9 +444,9 @@ function drawGeometry() {
   const cx = w * 0.55;
   const cy = h * 0.53;
   const earthSceneR = 1;
-  // A slightly longer focal distance in overview mode keeps the widening view from
-  // feeling excessively fish-eyed while retaining useful depth cues.
-  const cameraDistance = 16.25 + 2.25 * smoothstep(0.35, 1, geoRangeZoom);
+  // Keep perspective fixed so wheel/pinch zoom changes framing rather than also
+  // changing the camera's focal characteristics.
+  const cameraDistance = 16.25;
   const sunDir = unit(now.sun);
   const sunView = unit(project3(sunDir));
   const sunProjection = projectedScreenDirection(sunView);
@@ -823,6 +899,11 @@ async function loadDataset(datasetIndex = 0) {
     sun: data.sun_eci_km,
   };
   eph.rangeSamples = eph.sc.map(norm);
+  closeViewTopocentricRangeScale = computeCloseViewTopocentricRangeScale(eph.sc);
+  console.info(
+    `[3D view] close-view topocentric range scale for ${targetName()}:`,
+    closeViewTopocentricRangeScale.toFixed(3),
+  );
   applyDatasetDefaults(data);
   els.timeSlider.max = eph.times.length - 1;
   idx = findClosestSample();
