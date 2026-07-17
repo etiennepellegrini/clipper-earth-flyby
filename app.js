@@ -19,7 +19,7 @@ const ENABLE_OVERVIEW_RANGE_COMPRESSION = false;
 // Smallest Earth size relative to the initial close-view size.
 // - Natural-only mode: reached at maximum zoom-out.
 // - Hybrid mode: reached when OVERVIEW_BLEND_START is reached, then held fixed.
-const NATURAL_ZOOM_MIN_SCALE = 0.12;
+const NATURAL_ZOOM_MIN_SCALE = 0.20;
 
 // In hybrid mode, ordinary camera zoom runs from geoRangeZoom 0 to this value;
 // after this point, Earth stays at NATURAL_ZOOM_MIN_SCALE while the app blends
@@ -49,6 +49,22 @@ const TARGET_DISPLAYED_CA_CLEARANCE_ER = 3.1;
 // Safety bounds for automatic scaling of unusually near or distant targets.
 const MIN_AUTO_CLOSE_VIEW_RANGE_SCALE = 0.03;
 const MAX_AUTO_CLOSE_VIEW_RANGE_SCALE = 1.0;
+
+// 3D projection/path-shape tuning -------------------------------------------
+// Use a very long focal distance (telephoto / effectively orthographic) so an
+// inbound leg is not visually shortened merely because it lies farther behind
+// Earth than the outbound leg. Orbit rotation and occlusion still provide the
+// 3D cues. Lower values add stronger perspective, but also distort apparent
+// path length and screen speed.
+const CAMERA_DISTANCE_ER = 1_000_000;
+
+// With a topocentric range scale below 1, anchor the entire displayed path to
+// the station at the CURRENT slider epoch. This is one affine transform, so it
+// preserves the trajectory's shape while keeping the current target marker's
+// station-to-target direction exactly aligned with the sky map.
+// Set to 'sample-station' to restore the older behavior, where every path sample
+// is pulled toward the rotating station at that sample's own epoch.
+const TOPOCENTRIC_PATH_ANCHOR_MODE = 'sample-station';
 const PLACES = {
   santaMonica: { lat: 34.0195, lon: -118.4912, height: 30, label: 'Santa Monica, CA' },
   strasbourg: { lat: 48.5734, lon: 7.7521, height: 142, label: 'Strasbourg, France' },
@@ -420,8 +436,10 @@ function geometryZoomState(w, h, obs) {
 
   return { earthR, topocentricRangeScale };
 }
-function targetSceneVec(v, date, obs, topocentricRangeScale) {
-  const stationER = mul(observerEci(obs.lat, obs.lon, obs.height, date), 1 / RE_KM);
+function targetSceneVec(v, date, obs, topocentricRangeScale, currentStationER) {
+  const stationER = TOPOCENTRIC_PATH_ANCHOR_MODE === 'sample-station'
+    ? mul(observerEci(obs.lat, obs.lon, obs.height, date), 1 / RE_KM)
+    : currentStationER;
   const targetER = mul(v, 1 / RE_KM);
   return add(stationER, mul(sub(targetER, stationER), topocentricRangeScale));
 }
@@ -444,9 +462,13 @@ function drawGeometry() {
   const cx = w * 0.55;
   const cy = h * 0.53;
   const earthSceneR = 1;
-  // Keep perspective fixed so wheel/pinch zoom changes framing rather than also
-  // changing the camera's focal characteristics.
-  const cameraDistance = 16.25;
+  // Long-focal-length projection keeps both flyby legs at nearly the same
+  // screen scale. CAMERA_DISTANCE_ER is intentionally independent of zoom.
+  const cameraDistance = CAMERA_DISTANCE_ER;
+  const currentStationER = mul(
+    observerEci(obs.lat, obs.lon, obs.height, now.date),
+    1 / RE_KM,
+  );
   const sunDir = unit(now.sun);
   const sunView = unit(project3(sunDir));
   const sunProjection = projectedScreenDirection(sunView);
@@ -475,7 +497,11 @@ function drawGeometry() {
       scene,
     };
   }
-  function mapTarget(v, date) { return projectScene(targetSceneVec(v, date, obs, topocentricRangeScale)); }
+  function mapTarget(v, date) {
+    return projectScene(targetSceneVec(
+      v, date, obs, topocentricRangeScale, currentStationER,
+    ));
+  }
   function mapEarth(v) { return projectScene(earthSceneVec(v)); }
 
   if (sunProjection.visible) drawProjectedSun(ctx, cx, cy, earthR, w, h, sunProjection);
@@ -579,7 +605,7 @@ function drawGeometry() {
 
   // Observer marker and local zenith. A far-side station remains visible as a dim,
   // shaded x-ray marker, while its zenith line is suppressed.
-  const obsVec = observerEci(obs.lat, obs.lon, obs.height, now.date);
+  const obsVec = mul(currentStationER, RE_KM);
   const obsView = project3(unit(obsVec));
   const obsFront = obsView[2] > earthSceneR / cameraDistance;
   const op = mapEarth(obsVec);
@@ -779,10 +805,10 @@ function updateReadout() {
   const s = sampleAt(idx);
   els.timeReadout.textContent = fmt.format(s.date).replace(' UTC', '') + ' UTC';
   const reasons = [];
-  if (s.topo.alt < getObserver().minAlt) reasons.push('below/min altitude');
+  if (s.topo.alt < getObserver().minAlt) reasons.push('below horizon');
   if (!s.dark) reasons.push('sky too bright');
-  if (!s.ecl.sunlit) reasons.push('target in Earth shadow');
-  if (!s.brightEnough) reasons.push('too faint by rough model');
+  if (!s.ecl.sunlit) reasons.push('in Earth shadow');
+  if (!s.brightEnough) reasons.push('too faint');
   let text, cls;
   if (s.visible) { text = 'Potentially visible'; cls = 'good'; }
   else if (s.topo.alt > 0 && s.dark && s.ecl.sunlit) { text = 'Geometrically visible, probably faint'; cls = 'warn'; }
