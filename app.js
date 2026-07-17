@@ -30,6 +30,7 @@ let idx = 0;
 let playTimer = null;
 let bestCache = [];
 let geoRot = { yaw: -0.9, pitch: 0.45 };
+let geoViewPreset = 'perspective';
 let dragging = false, lastDrag = null;
 
 const fmt = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'medium', timeZone: 'UTC' });
@@ -292,6 +293,12 @@ function drawGeometry() {
   clearPrepared(ctx, w, h);
   const obs = getObserver();
   const now = sampleAt(idx, obs);
+
+  // Presets are camera constraints, not one-time guesses. The Sun view tracks the
+  // current epoch; dragging the canvas switches back to a custom camera.
+  if (geoViewPreset === 'sun') geoRot = yawPitchForDirection(unit(now.sun));
+  else if (geoViewPreset === 'north') geoRot = { yaw: 0, pitch: 0 };
+
   const mode = els.geoScale?.value || 'near';
   const maxR = Math.max(...eph.rangeSamples);
   const nearViewER = 5.0;
@@ -301,8 +308,7 @@ function drawGeometry() {
   const earthR = mode === 'near' ? scale / nearViewER : 46;
   const sunDir = unit(now.sun);                 // Earth -> Sun, inertial
   const sunView = unit(project3(sunDir));       // Earth -> Sun, current view frame
-  const sunScreen = screenVector(sunView);      // Earth -> Sun, screen x/y
-  const antiSunScreen = [-sunScreen[0], -sunScreen[1]];
+  const sunProjection = projectedScreenDirection(sunView);
 
   // Star speckles: deterministic from canvas size, no runtime assets.
   ctx.save();
@@ -318,43 +324,21 @@ function drawGeometry() {
     const c = project3(scene);
     return { x: cx + c[0]*scale, y: cy - c[1]*scale, z: c[2], scene };
   }
-  function mapNorm(v) {
-    const c = project3(v);
-    return { x: cx + c[0]*scale, y: cy - c[1]*scale, z: c[2] };
-  }
-  function drawPolyline(points, color, width=1.5, dash=null) {
-    ctx.beginPath();
-    points.forEach((p, n) => n ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
-    if (dash) ctx.setLineDash(dash);
-    ctx.strokeStyle = color; ctx.lineWidth = width; ctx.stroke();
-    if (dash) ctx.setLineDash([]);
-  }
-  function greatCirclePoints(b1, b2, radiusN) {
-    const pts = [];
-    for (let k=0; k<=160; k++) {
-      const t = 2 * Math.PI * k / 160;
-      pts.push(mapNorm(add(mul(b1, radiusN * Math.cos(t)), mul(b2, radiusN * Math.sin(t)))));
-    }
-    return pts;
+
+  // The Sun is an angular direction, not a nearby scene object. Show its screen-plane
+  // projection only when that projection is meaningful. When the camera looks nearly
+  // along the Sun line, there is no honest left/right edge on which to place it, so it
+  // disappears instead of being parked at an arbitrary side.
+  if (sunProjection.visible) {
+    drawProjectedSun(ctx, cx, cy, earthR, w, h, sunProjection);
   }
 
-  // Put the Sun on the edge of the frame, instead of a floating vector arrow.
-  // It means: “the Sun is far away in this screen direction.” If the current camera
-  // looks almost exactly along the Sun line, the label says it is mostly into/out of the screen.
-  const sunAtEdge = edgePoint(cx, cy, sunScreen[0], sunScreen[1], w, h, 34, sunScreen[2]);
-  drawFarSun(ctx, sunAtEdge.x, sunAtEdge.y, sunAtEdge.inScreenLabel || (sunView[2] >= 0 ? 'Sun far away that way' : 'Sun far away behind view'));
-  drawSunbeams(ctx, sunAtEdge.x, sunAtEdge.y, cx, cy, sunScreen);
-
-  // Reference planes: ecliptic and equator, to separate Solar-System geometry from the local horizon view.
-  const eps = rad(23.439291111);
-  const eclB1 = [1,0,0], eclB2 = [0,Math.cos(eps),Math.sin(eps)];
-  drawPolyline(greatCirclePoints(eclB1, eclB2, mode === 'near' ? 0.92 : 0.78), 'rgba(255,211,110,.34)', 1.2, [6,5]);
-  drawPolyline(greatCirclePoints([1,0,0], [0,1,0], mode === 'near' ? 0.74 : 0.62), 'rgba(129,212,255,.15)', 1.0, [3,7]);
-
-  // Earth shadow cylinder/cone approximation, behind Earth and opposite the Sun.
-  // This now matches the Earth night side: Sun is on one side of the canvas; shadow extends the other way.
-  const shEdge = edgePoint(cx, cy, antiSunScreen[0], antiSunScreen[1], w, h, 18);
-  drawEarthShadow(ctx, cx, cy, shEdge.x, shEdge.y, earthR);
+  // Earth shadow cylinder/cone approximation, opposite the projected Sun direction.
+  // A head-on shadow has no useful side projection, so omit the wedge in that case too.
+  if (sunProjection.visible) {
+    const shEdge = frameEdgePoint(cx, cy, -sunProjection.x, -sunProjection.y, w, h, 18);
+    drawEarthShadow(ctx, cx, cy, shEdge.x, shEdge.y, earthR, sunProjection.opacity);
+  }
 
   // Target path. Near mode intentionally lets distant samples leave the frame; compressed mode fits all samples.
   let last = null;
@@ -374,7 +358,9 @@ function drawGeometry() {
   // Real Sun/Earth geometry for the lit and dark side of Earth. The pixel shader is
   // not a texture; each visible surface point is colored by dot(surfaceNormal, Earth→Sun).
   drawShadedEarth(ctx, cx, cy, earthR, sunView);
-  drawTerminator(ctx, cx, cy, earthR, sunView);
+
+  // Draw Earth's equator on the globe itself—not as a floating reference-plane ring.
+  drawSurfaceGreatCircle(ctx, cx, cy, earthR, [1,0,0], [0,1,0], 'rgba(206,231,255,.58)', [3,5]);
 
   // Subsolar point only if it is on the visible hemisphere in this camera view.
   if (sunView[2] > 0) {
@@ -411,58 +397,103 @@ function drawGeometry() {
   ctx.fillText(behindEarth ? `${shortTargetName()} (behind Earth)` : shortTargetName(), sp.x + 12, sp.y + 4);
   ctx.restore();
 
-  const labelE = mapNorm(add(mul(eclB1, mode === 'near' ? 0.70 : 0.60), mul(eclB2, mode === 'near' ? 0.52 : 0.42)));
-  ctx.fillStyle = 'rgba(255,231,168,.70)'; ctx.font = '12px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.fillText('ecliptic plane', labelE.x, labelE.y);
   ctx.fillStyle = 'rgba(220,235,250,.68)'; ctx.font = '12px system-ui, sans-serif'; ctx.textAlign = 'center';
-  ctx.fillText(mode === 'near' ? 'near-Earth scale; Sun on edge; Earth day/night uses real Sun geometry' : 'log-compressed full ±window geometry; day/night uses real Sun geometry', cx, h - 16);
+  ctx.fillText(mode === 'near' ? 'near-Earth scale; Earth day/night uses real Sun geometry' : 'log-compressed full ±window geometry; Earth day/night uses real Sun geometry', cx, h - 16);
 }
 
-function screenVector(viewDir) {
-  let vx = viewDir[0], vy = -viewDir[1];
-  const m = Math.hypot(vx, vy);
-  if (m < 0.08) return [0.92, -0.38, true];
-  return [vx/m, vy/m, false];
+function projectedScreenDirection(viewDir) {
+  const sx = viewDir[0];
+  const sy = -viewDir[1];
+  const planeMagnitude = Math.hypot(sx, sy);
+  if (planeMagnitude < 1e-12) {
+    return { x: 0, y: 0, planeMagnitude, opacity: 0, visible: false };
+  }
+  // Fade the marker as the Sun direction approaches the camera axis, then remove it.
+  // This avoids inventing an arbitrary side when the Sun is in front of/behind the viewer.
+  const opacity = clamp((planeMagnitude - 0.08) / 0.24, 0, 1);
+  return {
+    x: sx / planeMagnitude,
+    y: sy / planeMagnitude,
+    planeMagnitude,
+    opacity,
+    visible: opacity > 0.02,
+  };
 }
-function edgePoint(cx, cy, vx, vy, w, h, margin=28, mostlyInScreen=false) {
+
+function frameEdgePoint(cx, cy, vx, vy, w, h, margin=20) {
   const xlim = vx > 0 ? (w - margin - cx) / vx : vx < 0 ? (margin - cx) / vx : Infinity;
   const ylim = vy > 0 ? (h - margin - cy) / vy : vy < 0 ? (margin - cy) / vy : Infinity;
   const t = Math.max(0, Math.min(xlim, ylim));
-  return { x: cx + vx*t, y: cy + vy*t, inScreenLabel: mostlyInScreen ? 'Sun mostly along view line' : '' };
+  return { x: cx + vx*t, y: cy + vy*t };
 }
-function drawFarSun(ctx, x, y, label) {
-  const g = ctx.createRadialGradient(x, y, 4, x, y, 54);
-  g.addColorStop(0, 'rgba(255,244,184,1)');
-  g.addColorStop(.18, 'rgba(255,211,110,.92)');
-  g.addColorStop(1, 'rgba(255,211,110,0)');
-  ctx.beginPath(); ctx.arc(x, y, 58, 0, Math.PI*2); ctx.fillStyle = g; ctx.fill();
-  ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI*2); ctx.fillStyle = '#ffd36e'; ctx.fill();
-  ctx.strokeStyle = 'rgba(255,244,184,.9)'; ctx.lineWidth = 2; ctx.stroke();
-  ctx.fillStyle = 'rgba(255,241,198,.92)'; ctx.font = '13px system-ui, sans-serif'; ctx.textAlign = x < 90 ? 'left' : 'right';
-  ctx.fillText(label, x < 90 ? x + 18 : x - 18, y + 4);
-}
-function drawSunbeams(ctx, sunX, sunY, cx, cy, sunScreen) {
-  const dx = cx - sunX, dy = cy - sunY;
+
+function drawProjectedSun(ctx, cx, cy, earthR, w, h, projection) {
+  const edge = frameEdgePoint(cx, cy, projection.x, projection.y, w, h, 16);
+  const dx = edge.x - cx, dy = edge.y - cy;
   const len = Math.hypot(dx, dy) || 1;
   const ux = dx / len, uy = dy / len;
-  const px = -uy, py = ux;
+  const sunRadius = 6;
+
   ctx.save();
-  ctx.strokeStyle = 'rgba(255,211,110,.34)';
-  ctx.lineWidth = 2;
-  ctx.setLineDash([9, 8]);
-  for (const off of [-42, 0, 42]) {
-    const x1 = sunX + px * off, y1 = sunY + py * off;
-    const x2 = cx - ux * 35 + px * off * .25, y2 = cy - uy * 35 + py * off * .25;
-    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
-  }
+  ctx.globalAlpha = projection.opacity;
+
+  // One projected direction line. Earth is drawn later, so the center portion is naturally hidden.
+  ctx.beginPath();
+  ctx.moveTo(cx + ux * earthR * 0.94, cy + uy * earthR * 0.94);
+  ctx.lineTo(edge.x - ux * (sunRadius + 4), edge.y - uy * (sunRadius + 4));
+  ctx.strokeStyle = 'rgba(255,211,110,.52)';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([6,6]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  const glow = ctx.createRadialGradient(edge.x, edge.y, 1, edge.x, edge.y, 24);
+  glow.addColorStop(0, 'rgba(255,244,184,.95)');
+  glow.addColorStop(.22, 'rgba(255,211,110,.55)');
+  glow.addColorStop(1, 'rgba(255,211,110,0)');
+  ctx.beginPath(); ctx.arc(edge.x, edge.y, 25, 0, Math.PI*2); ctx.fillStyle = glow; ctx.fill();
+  ctx.beginPath(); ctx.arc(edge.x, edge.y, sunRadius, 0, Math.PI*2); ctx.fillStyle = '#ffd36e'; ctx.fill();
+  ctx.strokeStyle = 'rgba(255,244,184,.9)'; ctx.lineWidth = 1.4; ctx.stroke();
   ctx.restore();
 }
-function drawEarthShadow(ctx, cx, cy, x2, y2, earthR) {
+
+function drawSurfaceGreatCircle(ctx, cx, cy, R, basis1, basis2, color, dash) {
+  let drawing = false;
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.15;
+  ctx.setLineDash(dash || []);
+  for (let k=0; k<=360; k++) {
+    const t = 2*Math.PI*k/360;
+    const world = add(mul(basis1, Math.cos(t)), mul(basis2, Math.sin(t)));
+    const view = project3(world);
+    if (view[2] < -1e-5) {
+      if (drawing) ctx.stroke();
+      drawing = false;
+      continue;
+    }
+    const x = cx + view[0]*R*.985;
+    const y = cy - view[1]*R*.985;
+    if (!drawing) {
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      drawing = true;
+    } else {
+      ctx.lineTo(x, y);
+    }
+  }
+  if (drawing) ctx.stroke();
+  ctx.restore();
+}
+
+function drawEarthShadow(ctx, cx, cy, x2, y2, earthR, projectionOpacity=1) {
   const dx = x2 - cx, dy = y2 - cy;
   const len = Math.hypot(dx, dy) || 1;
   const ux = dx / len, uy = dy / len;
   const px = -uy, py = ux;
   const nearW = earthR * 1.92, farW = earthR * 1.25;
   ctx.save();
+  ctx.globalAlpha = projectionOpacity;
   ctx.beginPath();
   ctx.moveTo(cx + px*nearW/2, cy + py*nearW/2);
   ctx.lineTo(x2 + px*farW/2, y2 + py*farW/2);
@@ -518,32 +549,6 @@ function drawShadedEarth(ctx, cx, cy, R, sunView) {
   ctx.putImageData(img, minX, minY);
   ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI*2);
   ctx.strokeStyle = 'rgba(220,240,255,.48)'; ctx.lineWidth = 1.5; ctx.stroke();
-}
-function drawTerminator(ctx, cx, cy, R, sunView) {
-  const l = unit(sunView);
-  // The terminator is the great circle where normal·sun = 0. Draw only the visible half.
-  const ref = Math.abs(l[2]) < 0.9 ? [0,0,1] : [0,1,0];
-  const b1 = unit(cross(l, ref));
-  const b2 = unit(cross(l, b1));
-  let drawing = false;
-  ctx.save();
-  ctx.strokeStyle = 'rgba(255,244,184,.58)'; ctx.lineWidth = 1.6; ctx.setLineDash([4,4]);
-  for (let k=0; k<=240; k++) {
-    const t = 2*Math.PI*k/240;
-    const n = add(mul(b1, Math.cos(t)), mul(b2, Math.sin(t)));
-    if (n[2] < 0) { if (drawing) ctx.stroke(); drawing = false; continue; }
-    const x = cx + n[0]*R, y = cy - n[1]*R;
-    if (!drawing) { ctx.beginPath(); ctx.moveTo(x,y); drawing = true; }
-    else ctx.lineTo(x,y);
-  }
-  if (drawing) ctx.stroke();
-  ctx.restore();
-}
-function arrow(ctx, x1,y1,x2,y2,color) {
-  ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 3; ctx.lineCap = 'round';
-  ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
-  const a = Math.atan2(y2-y1,x2-x1);
-  ctx.beginPath(); ctx.moveTo(x2,y2); ctx.lineTo(x2-10*Math.cos(a-.45), y2-10*Math.sin(a-.45)); ctx.lineTo(x2-10*Math.cos(a+.45), y2-10*Math.sin(a+.45)); ctx.closePath(); ctx.fill();
 }
 function updateReadout() {
   const s = sampleAt(idx);
@@ -810,9 +815,15 @@ function scanBestLocations() {
 }
 
 function yawPitchForDirection(dir) {
-  // Rotate a requested inertial direction close to the screen normal, useful for a Sun-line preset.
-  const x = dir[0], y = dir[1], z = dir[2];
-  return { yaw: Math.atan2(x, y), pitch: Math.asin(clamp(z, -1, 1)) };
+  // project3() maps the world direction toward the camera onto +view-Z.
+  // Solve that mapping exactly, including directions south of the equatorial plane.
+  const d = unit(dir);
+  const xy = Math.hypot(d[0], d[1]);
+  if (xy < 1e-12) return { yaw: 0, pitch: d[2] >= 0 ? 0 : Math.PI };
+  return {
+    yaw: Math.atan2(-d[0], d[1]),
+    pitch: Math.atan2(xy, d[2]),
+  };
 }
 
 function wireEvents() {
@@ -841,14 +852,17 @@ function wireEvents() {
     }, err => alert(err.message));
   });
   els.geoScale?.addEventListener('change', drawGeometry);
-  els.geoPresetEyes?.addEventListener('click', () => { geoRot = { yaw: -0.9, pitch: 0.45 }; drawGeometry(); });
-  els.geoPresetSun?.addEventListener('click', () => { geoRot = yawPitchForDirection(unit(sampleAt(idx).sun)); drawGeometry(); });
-  els.geoPresetNorth?.addEventListener('click', () => { geoRot = { yaw: 0, pitch: Math.PI / 2 }; drawGeometry(); });
-  els.geo.addEventListener('pointerdown', e => { dragging = true; lastDrag = [e.clientX, e.clientY]; els.geo.setPointerCapture(e.pointerId); });
+  if (els.geoPresetEyes) { els.geoPresetEyes.textContent = 'Perspective'; els.geoPresetEyes.title = 'Oblique perspective view'; }
+  if (els.geoPresetSun) { els.geoPresetSun.textContent = 'From Sun'; els.geoPresetSun.title = 'Look from the Sun toward Earth'; }
+  if (els.geoPresetNorth) { els.geoPresetNorth.textContent = 'North Pole'; els.geoPresetNorth.title = "Look down Earth's north-pole axis"; }
+  els.geoPresetEyes?.addEventListener('click', () => { geoViewPreset = 'perspective'; geoRot = { yaw: -0.9, pitch: 0.45 }; drawGeometry(); });
+  els.geoPresetSun?.addEventListener('click', () => { geoViewPreset = 'sun'; drawGeometry(); });
+  els.geoPresetNorth?.addEventListener('click', () => { geoViewPreset = 'north'; drawGeometry(); });
+  els.geo.addEventListener('pointerdown', e => { geoViewPreset = 'custom'; dragging = true; lastDrag = [e.clientX, e.clientY]; els.geo.setPointerCapture(e.pointerId); });
   els.geo.addEventListener('pointermove', e => {
     if (!dragging || !lastDrag) return;
     const dx = e.clientX - lastDrag[0], dy = e.clientY - lastDrag[1]; lastDrag = [e.clientX, e.clientY];
-    geoRot.yaw += dx * 0.008; geoRot.pitch = clamp(geoRot.pitch + dy * 0.008, -1.35, 1.35); drawGeometry();
+    geoRot.yaw += dx * 0.008; geoRot.pitch = clamp(geoRot.pitch + dy * 0.008, 0.01, Math.PI - 0.01); drawGeometry();
   });
   els.geo.addEventListener('pointerup', () => { dragging = false; lastDrag = null; });
   window.addEventListener('resize', render);
