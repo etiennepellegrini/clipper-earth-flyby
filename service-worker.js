@@ -1,4 +1,4 @@
-const CACHE_NAME = 'earth-flyby-viz-v7';
+const CACHE_NAME = 'earth-flyby-viz-v8';
 const CORE_ASSETS = [
   './',
   './index.html',
@@ -7,7 +7,6 @@ const CORE_ASSETS = [
   './manifest.webmanifest',
   './icon.svg',
   './data/datasets.json',
-  './data/clipper_ega.json'
 ];
 
 self.addEventListener('install', event => {
@@ -22,11 +21,20 @@ self.addEventListener('activate', event => {
 
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
+
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) return;
+
   event.respondWith(
     fetch(event.request)
       .then(response => {
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy)).catch(() => {});
+        if (response.ok) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME)
+            .then(cache => cache.put(event.request, copy))
+            .catch(() => {});
+        }
+
         return response;
       })
       .catch(() => caches.match(event.request))

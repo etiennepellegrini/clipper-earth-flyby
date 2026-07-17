@@ -12,6 +12,9 @@ from pathlib import Path
 RE_KM = 6378.137
 RSUN_KM = 695700
 
+COARSE_LAT_STEP = 5  # degrees
+COARSE_LON_STEP = 5  # degrees
+COARSE_TIME_STEP = 5  # minutes
 
 def rad(d): return d * math.pi / 180
 
@@ -130,11 +133,11 @@ def main():
     dates=[parse_time(t) for t in data['times']]
     sc=data.get('object_eci_km') or data.get('target_eci_km') or data['clipper_eci_km']; sun=data['sun_eci_km']
     sample_sec=(dates[1]-dates[0]).total_seconds() if len(dates)>1 else 60
-    coarse_stride=max(1, round(5*60/sample_sec))
+    coarse_stride=max(1, round(COARSE_TIME_STEP*60/sample_sec))
     best=scan_window(None, dates, sc, sun, args,
         i0=0, i1=len(dates)-1, i_step=coarse_stride,
-        lat0=-85, lat1=85, lat_step=5,
-        lon0=-180, lon1=175, lon_step=5)
+        lat0=-85, lat1=85, lat_step=COARSE_LAT_STEP,
+        lon0=-180, lon1=175, lon_step=COARSE_LON_STEP)
     best=refine(best, dates, sc, sun, args, sample_sec, coarse_stride)
     print('source:', data.get('metadata',{}).get('source'))
     if best is None:

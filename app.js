@@ -3,6 +3,9 @@
 const RE_KM = 6378.137;
 const RSUN_KM = 695700;
 const AU_KM = 149597870.7;
+const COARSE_LAT_STEP = 2;
+const COARSE_LON_STEP = 2;
+const COARSE_TIME_STEP = 5;
 const PLACES = {
   santaMonica: { lat: 34.0195, lon: -118.4912, height: 30, label: 'Santa Monica, CA' },
   strasbourg: { lat: 48.5734, lon: 7.7521, height: 142, label: 'Strasbourg, France' },
@@ -767,12 +770,12 @@ function scanBestLocations() {
   setTimeout(() => {
     const obsBase = getObserver();
     const sampleSec = Math.max(1, (eph.dates[1] - eph.dates[0]) / 1000 || 60);
-    const coarseStride = Math.max(1, Math.round((5*60) / sampleSec));
+    const coarseStride = Math.max(1, Math.round((COARSE_TIME_STEP*60) / sampleSec));
 
     let best = scanWindowForBest(null, obsBase, {
       i0: 0, i1: eph.times.length - 1, iStep: coarseStride,
-      lat0: -85, lat1: 85, latStep: 5,
-      lon0: -180, lon1: 175, lonStep: 5,
+      lat0: -85, lat1: 85, latStep: COARSE_LAT_STEP,
+      lon0: -180, lon1: 175, lonStep: COARSE_LON_STEP,
     });
 
     if (!best) {
