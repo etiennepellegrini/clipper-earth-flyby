@@ -11,6 +11,12 @@
       "label": "Europa Clipper \u00b7 Dec 2026",
       "path": "data/europa-clipper-2026-earth-flyby.json",
       "description": "Horizons target -159, closest sampled altitude 3228 km at 2026-12-03T20:14:11Z."
+    },
+    {
+      "id": "juice-2026-earth-flyby",
+      "label": "JUICE \u00b7 Sep 2026",
+      "path": "data/juice-2026-earth-flyby.json",
+      "description": "Horizons target -28, closest sampled altitude 8638 km at 2026-09-28T11:44:52Z."
     }
   ]
 }
